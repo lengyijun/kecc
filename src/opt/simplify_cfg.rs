@@ -170,19 +170,19 @@ impl Optimize<FunctionDefinition> for SimplifyCfgMerge {
         let mut res = false;
         let iter = prev.into_iter().filter_map(|(bid, a)| a.map(|x| (bid, x)));
         for (next_bid, (prev_bid, args)) in iter {
-            let Some(mut next_block ) = code.blocks.remove(&next_bid) else {continue };
+            let Some(next_block ) = code.blocks.remove(&next_bid) else {continue };
             let Some(prev_block ) = code.blocks.get_mut(&prev_bid) else {
                 let None = code.blocks.insert(next_bid, next_block) else {unreachable!()};
                 continue
             };
             res = true;
 
-            for operand in next_block
-                .instructions
-                .iter_mut()
-                .flat_map(|x| x.walk_operand_mut())
-                .chain(next_block.exit.walk_operand_mut())
-            {
+            let prev_block_instructions_len = prev_block.instructions.len();
+
+            prev_block.instructions.extend(next_block.instructions);
+            prev_block.exit = next_block.exit;
+
+            for operand in code.walk_operand_mut() {
                 match operand {
                     Operand::Register {
                         rid: ir::RegisterId::Arg { bid, aid },
@@ -200,7 +200,7 @@ impl Optimize<FunctionDefinition> for SimplifyCfgMerge {
                             *operand = Operand::Register {
                                 rid: ir::RegisterId::Temp {
                                     bid: prev_bid,
-                                    iid: prev_block.instructions.len() + *iid,
+                                    iid: prev_block_instructions_len + *iid,
                                 },
                                 dtype: dtype.clone(),
                             };
@@ -209,9 +209,6 @@ impl Optimize<FunctionDefinition> for SimplifyCfgMerge {
                     _ => {}
                 }
             }
-
-            prev_block.exit = next_block.exit;
-            prev_block.instructions.extend(next_block.instructions);
         }
         res
     }
@@ -304,12 +301,39 @@ impl Instruction {
 impl BlockExit {
     pub fn walk_operand_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut Operand> + 'a> {
         match self {
-            BlockExit::Jump { .. } => Box::new(std::iter::empty()),
-            BlockExit::ConditionalJump { condition, .. } => Box::new(std::iter::once(condition)),
-            BlockExit::Switch { value, .. } => Box::new(std::iter::once(value)),
+            BlockExit::Jump { arg } => Box::new(arg.args.iter_mut()),
+            BlockExit::ConditionalJump {
+                condition,
+                arg_then,
+                arg_else,
+            } => Box::new(
+                std::iter::once(condition)
+                    .chain(arg_then.args.iter_mut())
+                    .chain(arg_else.args.iter_mut()),
+            ),
+            BlockExit::Switch {
+                value,
+                default,
+                cases,
+            } => Box::new(
+                std::iter::once(value)
+                    .chain(default.args.iter_mut())
+                    .chain(cases.iter_mut().flat_map(|(_, ja)| ja.args.iter_mut())),
+            ),
             BlockExit::Return { value } => Box::new(std::iter::once(value)),
             BlockExit::Unreachable => Box::new(std::iter::empty()),
         }
+    }
+}
+
+impl Block {
+    pub fn walk_operand_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut Operand> + 'a> {
+        Box::new(
+            self.instructions
+                .iter_mut()
+                .flat_map(|x| x.walk_operand_mut())
+                .chain(self.exit.walk_operand_mut()),
+        )
     }
 }
 

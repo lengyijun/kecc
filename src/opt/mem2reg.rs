@@ -293,20 +293,10 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
 
         // utilize replacement
 
-        for block in code.blocks.values_mut() {
-            for operand in block
-                .instructions
-                .iter_mut()
-                .flat_map(|x| {
-                    let y: &mut Instruction = x;
-                    y.walk_operand_mut()
-                })
-                .chain(&mut block.exit.walk_operand_mut())
-            {
-                if let Operand::Register { rid, .. } = operand {
-                    if let Some(v) = replaces.get(rid) {
-                        *operand = v.clone().into_operand(&code_clone, &jiqian, &replaces);
-                    }
+        for operand in code.walk_operand_mut() {
+            if let Operand::Register { rid, .. } = operand {
+                if let Some(v) = replaces.get(rid) {
+                    *operand = v.clone().into_operand(&code_clone, &jiqian, &replaces);
                 }
             }
         }
