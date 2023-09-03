@@ -328,27 +328,6 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                         }
                     }
                 }
-                block.exit.walk_jump_args(|jump_arg| {
-                    for operand in jump_arg.args.iter_mut() {
-                        if let ir::Operand::Register { rid, .. } = operand {
-                            match register_table.get(rid) {
-                                Some(NumOrConstant::Constant(c)) => {
-                                    *operand = ir::Operand::Constant(c.clone());
-                                    modified = true;
-                                }
-                                Some(NumOrConstant::Num(num)) => {
-                                    if let Some(replacement) = leader_table.get(num) {
-                                        if operand != replacement {
-                                            *operand = replacement.clone();
-                                            modified = true;
-                                        }
-                                    }
-                                }
-                                None => {}
-                            }
-                        }
-                    }
-                });
             }
 
             let None = leader_tables.insert(bid, leader_table_vec) else {unreachable!()};
