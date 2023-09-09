@@ -2,7 +2,7 @@
 
 mod dtype;
 mod equiv;
-mod interp;
+pub mod interp;
 mod parse;
 mod visualize;
 mod write_ir;

@@ -1,3 +1,5 @@
+#![allow(clippy::result_unit_err)]
+
 use core::fmt;
 use core::iter;
 use core::mem;
@@ -174,7 +176,7 @@ impl Value {
     }
 
     #[inline]
-    fn default_from_dtype(
+    pub fn default_from_dtype(
         dtype: &Dtype,
         structs: &HashMap<String, Option<Dtype>>,
     ) -> Result<Self, ()> {
@@ -409,7 +411,7 @@ impl<'i> StackFrame<'i> {
     }
 }
 
-mod calculator {
+pub mod calculator {
     use super::Value;
     use crate::ir::*;
     use lang_c::ast;
