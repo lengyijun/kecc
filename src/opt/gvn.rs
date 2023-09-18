@@ -127,11 +127,7 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                     } => {
                         let x1 = operand2num(lhs, &mut num, &mut register_table);
                         let x2 = operand2num(rhs, &mut num, &mut register_table);
-                        let e = Expr::BinOp {
-                            op: op.clone(),
-                            lhs: x1,
-                            rhs: x2,
-                        };
+                        let e = Expr::binop(op.clone(), x1, x2);
                         (e, dtype.clone())
                     }
                     ir::Instruction::TypeCast {
@@ -362,7 +358,7 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct Num(usize);
 
 impl Num {
@@ -372,17 +368,40 @@ impl Num {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum NumOrConstant {
     Num(Num),
     Constant(ir::Constant),
 }
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-enum Expr<T: Clone + Hash + Eq> {
+enum Expr<T: Clone + Hash + Eq + Ord> {
     BinOp { op: BinaryOperator, lhs: T, rhs: T },
     UnaryOp { op: UnaryOperator, operand: T },
     TypeCast { value: T, target_dtype: Dtype },
     GetElementPtr { ptr: T, offset: T, dtype: Dtype },
+}
+
+impl<T: Clone + Hash + Eq + Ord> Expr<T> {
+    fn binop(op: BinaryOperator, lhs: T, rhs: T) -> Self {
+        match &op {
+            BinaryOperator::Plus
+            | BinaryOperator::Multiply
+            | BinaryOperator::Equals
+            | BinaryOperator::NotEquals
+            | BinaryOperator::BitwiseAnd
+            | BinaryOperator::BitwiseXor
+            | BinaryOperator::BitwiseOr
+            | BinaryOperator::LogicalAnd
+            | BinaryOperator::LogicalOr => {
+                let mut v = [lhs, rhs];
+                v.sort();
+                let [lhs, rhs] = v;
+                Self::BinOp { op, lhs, rhs }
+            }
+
+            _ => Self::BinOp { op, lhs, rhs },
+        }
+    }
 }
 
 fn operand2num(
