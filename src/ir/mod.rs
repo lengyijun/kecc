@@ -14,6 +14,7 @@ use hexf_parse::{parse_hexf32, parse_hexf64};
 use itertools::Itertools;
 use lang_c::ast;
 use ordered_float::OrderedFloat;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -593,7 +594,7 @@ impl Hash for RegisterId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Constant {
     Undef {
         dtype: Dtype,
@@ -1005,5 +1006,17 @@ impl<T> Named<T> {
 impl<T: fmt::Display> fmt::Display for Named<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
+    }
+}
+
+impl<T: Ord> PartialOrd for Named<T> {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        unreachable!()
+    }
+}
+
+impl<T: Ord> Ord for Named<T> {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        unreachable!()
     }
 }

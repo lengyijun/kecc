@@ -41,7 +41,7 @@ struct BaseDtype {
 }
 
 /// TODO(document)
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub enum Dtype {
     /// TODO(document)
     Unit {
