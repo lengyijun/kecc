@@ -1438,6 +1438,19 @@ fn translate_block(
                     }
                 }
 
+                match ret_alloc {
+                    RetLocation::OnStack => {
+                        res.extend(mk_itype(
+                            IType::Addi(DataSize::Double),
+                            Register::T0,
+                            Register::S0,
+                            *destination,
+                        ));
+                        res.extend(mk_stype(SType::SD, Register::Sp, Register::T0, 0));
+                    }
+                    RetLocation::InRegister => {}
+                };
+
                 match callee {
                     ir::Operand::Constant(ir::Constant::GlobalVariable {
                         name,
@@ -1465,15 +1478,7 @@ fn translate_block(
                     _ => unreachable!(),
                 }
                 match ret_alloc {
-                    RetLocation::OnStack => {
-                        cp(
-                            (Register::Sp, 0),
-                            (Register::S0, *destination),
-                            ret_dtype.clone(),
-                            &mut res,
-                            source,
-                        );
-                    }
+                    RetLocation::OnStack => {}
                     RetLocation::InRegister => match ret_dtype {
                         ir::Dtype::Unit { .. } => {}
                         ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
@@ -1770,9 +1775,10 @@ fn translate_block(
                 (RetLocation::OnStack, ir::Dtype::Struct { .. }) => match value {
                     ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
                     ir::Operand::Register { rid, dtype } => {
-                        cp(
+                        cp_to_indirect_target(
                             (Register::S0, *register_mp.get(rid).unwrap()),
                             (Register::S0, 0),
+                            0,
                             dtype.clone(),
                             &mut res,
                             source,
