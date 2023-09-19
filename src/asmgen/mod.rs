@@ -334,22 +334,15 @@ fn translate_block(
                     }
                     Value::Float { value, width } => {
                         let label = float_mp.get_label(Float { value, width });
-                        res.push(asm::Instruction::UType {
-                            instr: asm::UType::Lui,
-                            rd: Register::A0,
-                            imm: Immediate::Relocation {
-                                relocation: asm::RelocationFunction::Hi20,
-                                symbol: label.clone(),
-                            },
-                        });
+                        res.push(asm::Instruction::Pseudo(Pseudo::La {
+                            rd: Register::T3,
+                            symbol: label,
+                        }));
                         res.push(asm::Instruction::IType {
                             instr: IType::load(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: Register::A0,
-                            imm: Immediate::Relocation {
-                                relocation: asm::RelocationFunction::Lo12,
-                                symbol: label,
-                            },
+                            rs1: Register::T3,
+                            imm: Immediate::Value(0),
                         });
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
@@ -499,22 +492,15 @@ fn translate_block(
                     }
                     Value::Float { value, width } => {
                         let label = float_mp.get_label(Float { value, width });
-                        res.push(asm::Instruction::UType {
-                            instr: asm::UType::Lui,
-                            rd: Register::A0,
-                            imm: Immediate::Relocation {
-                                relocation: asm::RelocationFunction::Hi20,
-                                symbol: label.clone(),
-                            },
-                        });
+                        res.push(asm::Instruction::Pseudo(Pseudo::La {
+                            rd: Register::T0,
+                            symbol: label,
+                        }));
                         res.push(asm::Instruction::IType {
                             instr: IType::load(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: Register::A0,
-                            imm: Immediate::Relocation {
-                                relocation: asm::RelocationFunction::Lo12,
-                                symbol: label,
-                            },
+                            rs1: Register::T0,
+                            imm: Immediate::Value(0),
                         });
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
@@ -1235,35 +1221,18 @@ fn translate_block(
                         name,
                         dtype: dtype @ ir::Dtype::Int { .. },
                     }),
-                value:
-                    operand @ ir::Operand::Register {
-                        dtype: ir::Dtype::Int { .. },
-                        ..
-                    },
+                value,
             } => {
-                res.push(asm::Instruction::UType {
-                    instr: asm::UType::Lui,
+                res.push(asm::Instruction::Pseudo(Pseudo::La {
                     rd: Register::T1,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Hi20,
-                        symbol: Label(name.clone()),
-                    },
-                });
-                operand2reg(
-                    operand.clone(),
-                    Register::T0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
+                    symbol: Label(name.clone()),
+                }));
+                operand2reg(value.clone(), Register::T0, &mut res, register_mp, float_mp);
                 res.push(asm::Instruction::SType {
                     instr: SType::store(dtype.clone()),
                     rs1: Register::T1,
                     rs2: Register::T0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Lo12,
-                        symbol: Label(name.clone()),
-                    },
+                    imm: Immediate::Value(0),
                 });
             }
             ir::Instruction::Load {
@@ -1290,27 +1259,20 @@ fn translate_block(
                         dtype: dtype @ ir::Dtype::Int { .. },
                     }),
             } => {
-                res.push(asm::Instruction::UType {
-                    instr: asm::UType::Lui,
-                    rd: Register::A0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Hi20,
-                        symbol: Label(name.clone()),
-                    },
-                });
+                res.push(asm::Instruction::Pseudo(Pseudo::La {
+                    rd: Register::T0,
+                    symbol: Label(name.clone()),
+                }));
                 res.push(asm::Instruction::IType {
                     instr: IType::load(dtype.clone()),
-                    rd: Register::A0,
-                    rs1: Register::A0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Lo12,
-                        symbol: Label(name.clone()),
-                    },
+                    rd: Register::T0,
+                    rs1: Register::T0,
+                    imm: Immediate::Value(0),
                 });
                 res.extend(mk_stype(
                     SType::store(dtype.clone()),
                     Register::S0,
-                    Register::A0,
+                    Register::T0,
                     *destination,
                 ));
             }
@@ -1321,27 +1283,20 @@ fn translate_block(
                         dtype: dtype @ ir::Dtype::Float { .. },
                     }),
             } => {
-                res.push(asm::Instruction::UType {
-                    instr: asm::UType::Lui,
-                    rd: Register::A0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Hi20,
-                        symbol: Label(name.clone()),
-                    },
-                });
+                res.push(asm::Instruction::Pseudo(Pseudo::La {
+                    rd: Register::T0,
+                    symbol: Label(name.clone()),
+                }));
                 res.push(asm::Instruction::IType {
                     instr: IType::load(dtype.clone()),
-                    rd: Register::FA0,
-                    rs1: Register::A0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Lo12,
-                        symbol: Label(name.clone()),
-                    },
+                    rd: Register::FT0,
+                    rs1: Register::T0,
+                    imm: Immediate::Value(0),
                 });
                 res.extend(mk_stype(
                     SType::store(dtype.clone()),
                     Register::S0,
-                    Register::FA0,
+                    Register::FT0,
                     *destination,
                 ));
             }
@@ -1636,23 +1591,10 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                res.push(asm::Instruction::UType {
-                    instr: asm::UType::Lui,
+                res.push(asm::Instruction::Pseudo(Pseudo::La {
                     rd: Register::T0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Hi20,
-                        symbol: Label(name.clone()),
-                    },
-                });
-                res.push(asm::Instruction::IType {
-                    instr: asm::IType::Addi(DataSize::Double),
-                    rd: Register::T0,
-                    rs1: Register::T0,
-                    imm: Immediate::Relocation {
-                        relocation: asm::RelocationFunction::Lo12,
-                        symbol: Label(name.clone()),
-                    },
-                });
+                    symbol: Label(name.clone()),
+                }));
                 res.push(asm::Instruction::RType {
                     instr: RType::Add(DataSize::Word),
                     rd: Register::T0,
@@ -1856,88 +1798,27 @@ fn operand2reg(
                 imm: value as u64,
             }));
         }
-        ir::Operand::Constant(ir::Constant::Float { value, width }) => {
+        ir::Operand::Constant(ref c @ ir::Constant::Float { value, width }) => {
             let label = float_mp.get_label(Float { value, width });
-            res.push(asm::Instruction::UType {
-                instr: asm::UType::Lui,
-                rd: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Hi20,
-                    symbol: label.clone(),
-                },
-            });
+            res.push(asm::Instruction::Pseudo(Pseudo::La {
+                rd: Register::T3,
+                symbol: label,
+            }));
             res.push(asm::Instruction::IType {
-                instr: IType::load(operand.dtype()),
+                instr: IType::load(c.dtype()),
                 rd: register,
-                rs1: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Lo12,
-                    symbol: label,
-                },
+                rs1: Register::T3,
+                imm: Immediate::Value(0),
             });
         }
         ir::Operand::Constant(ir::Constant::GlobalVariable {
             name,
-            dtype: dtype @ ir::Dtype::Int { .. },
+            dtype: ir::Dtype::Function { .. },
         }) => {
-            res.push(asm::Instruction::UType {
-                instr: asm::UType::Lui,
-                rd: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Hi20,
-                    symbol: Label(name.clone()),
-                },
-            });
-            res.push(asm::Instruction::IType {
-                instr: IType::load(dtype),
+            res.push(asm::Instruction::Pseudo(Pseudo::La {
                 rd: register,
-                rs1: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Lo12,
-                    symbol: Label(name),
-                },
-            });
-        }
-        ir::Operand::Constant(ir::Constant::GlobalVariable {
-            name,
-            dtype: dtype @ ir::Dtype::Float { .. },
-        }) => {
-            res.push(asm::Instruction::UType {
-                instr: asm::UType::Lui,
-                rd: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Hi20,
-                    symbol: Label(name.clone()),
-                },
-            });
-            res.push(asm::Instruction::IType {
-                instr: IType::load(dtype),
-                rd: register,
-                rs1: Register::A0,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Lo12,
-                    symbol: Label(name),
-                },
-            });
-        }
-        ir::Operand::Constant(ir::Constant::GlobalVariable { name, .. }) => {
-            res.push(asm::Instruction::UType {
-                instr: asm::UType::Lui,
-                rd: register,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Hi20,
-                    symbol: Label(name.clone()),
-                },
-            });
-            res.push(asm::Instruction::IType {
-                instr: IType::Addi(DataSize::Byte),
-                rd: register,
-                rs1: register,
-                imm: Immediate::Relocation {
-                    relocation: asm::RelocationFunction::Lo12,
-                    symbol: Label(name),
-                },
-            });
+                symbol: Label(name),
+            }));
         }
         ir::Operand::Constant(ir::Constant::Undef {
             dtype:
