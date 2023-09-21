@@ -135,6 +135,61 @@ fn translate_function(
             Alloc::Stack { offset_to_s0 } => {
                 let None = register_mp.insert(register_id, *offset_to_s0 ) else {unreachable!()};
             }
+            Alloc::StructInRegister(v) => {
+                let ir::Dtype::Struct { name, size_align_offsets , fields, ..} = dtype else {unreachable!()};
+                let Some((size, align, offsets)) = (if size_align_offsets.is_some() {
+                    size_align_offsets.clone()
+                } else {
+                    source
+                        .structs
+                        .get(name.as_ref().unwrap())
+                        .and_then(|x| x.as_ref())
+                        .and_then(|x| x.get_struct_size_align_offsets())
+                        .and_then(|x| x.as_ref()).cloned()
+                } ) else {unreachable!()};
+
+                let Some(fields) = (if fields.is_some() {
+                    fields.clone()
+                } else {
+                    source
+                        .structs
+                        .get(name.as_ref().unwrap())
+                        .and_then(|x| x.as_ref())
+                        .and_then(|x| x.get_struct_fields())
+                        .and_then(|x| x.as_ref()).cloned()
+                } ) else {unreachable!()};
+
+                let align: i64 = align.max(4).try_into().unwrap();
+                while stack_offset_2_s0 % align != 0 {
+                    stack_offset_2_s0 -= 1;
+                }
+                stack_offset_2_s0 -= <usize as TryInto<i64>>::try_into(size.max(4)).unwrap();
+
+                for (x, dtype, offset) in izip!(v, fields, offsets) {
+                    match x {
+                        RegisterCouple::Single(register) => {
+                            alloc_arg.extend(mk_stype(
+                                SType::store(dtype.clone().into_inner()),
+                                Register::S0,
+                                *register,
+                                stack_offset_2_s0
+                                    + <usize as TryInto<i64>>::try_into(offset).unwrap(),
+                            ));
+                        }
+                        RegisterCouple::Double(register) => {
+                            alloc_arg.extend(mk_stype(
+                                SType::SD,
+                                Register::S0,
+                                *register,
+                                stack_offset_2_s0
+                                    + <usize as TryInto<i64>>::try_into(offset).unwrap(),
+                            ));
+                        }
+                        RegisterCouple::MergedToPrevious => {}
+                    }
+                }
+                let None = register_mp.insert(register_id, stack_offset_2_s0 ) else {unreachable!()};
+            }
         }
     }
 
@@ -1389,6 +1444,70 @@ fn translate_block(
                                 source,
                             );
                         }
+                        (
+                            Alloc::StructInRegister(v),
+                            ir::Operand::Register {
+                                rid,
+                                dtype:
+                                    ir::Dtype::Struct {
+                                        name,
+                                        fields,
+                                        size_align_offsets,
+                                        ..
+                                    },
+                            },
+                        ) => {
+                            let base_offset = *register_mp.get(rid).unwrap();
+
+                            let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
+                                size_align_offsets.clone()
+                            } else {
+                                source
+                                    .structs
+                                    .get(name.as_ref().unwrap())
+                                    .and_then(|x| x.as_ref())
+                                    .and_then(|x| x.get_struct_size_align_offsets())
+                                    .and_then(|x| x.as_ref()).cloned()
+                            } ) else {unreachable!()};
+
+                            let Some(fields) = (if fields.is_some() {
+                                fields.clone()
+                            } else {
+                                source
+                                    .structs
+                                    .get(name.as_ref().unwrap())
+                                    .and_then(|x| x.as_ref())
+                                    .and_then(|x| x.get_struct_fields())
+                                    .and_then(|x| x.as_ref()).cloned()
+                            } ) else {unreachable!()};
+
+                            for (register_couple, offset, dtype) in izip!(v, offsets, fields) {
+                                match register_couple {
+                                    RegisterCouple::Single(register) => {
+                                        res.extend(mk_itype(
+                                            IType::load((*dtype).clone()),
+                                            register,
+                                            Register::S0,
+                                            base_offset
+                                                + <usize as TryInto<i64>>::try_into(offset)
+                                                    .unwrap(),
+                                        ));
+                                    }
+                                    RegisterCouple::Double(register) => {
+                                        res.extend(mk_itype(
+                                            IType::LD,
+                                            register,
+                                            Register::S0,
+                                            base_offset
+                                                + <usize as TryInto<i64>>::try_into(offset)
+                                                    .unwrap(),
+                                        ));
+                                    }
+                                    RegisterCouple::MergedToPrevious => {}
+                                }
+                            }
+                            todo!()
+                        }
                         _ => unreachable!(),
                     }
                 }
@@ -2291,9 +2410,17 @@ fn initializer_2_directive(
 }
 
 #[derive(Debug, Clone, Copy)]
+enum RegisterCouple {
+    Single(Register),
+    Double(Register),
+    MergedToPrevious,
+}
+
+#[derive(Debug, Clone)]
 enum Alloc {
     Reg(Register),
     Stack { offset_to_s0: i64 },
+    StructInRegister(Vec<RegisterCouple>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2357,14 +2484,142 @@ impl FunctionSignature {
                         next_float_reg += 1;
                     }
                 }
-                ir::Dtype::Struct { .. } => {
-                    while caller_alloc % align != 0 {
-                        caller_alloc += 1;
+                ir::Dtype::Struct {
+                    name,
+                    fields,
+                    size_align_offsets,
+                    ..
+                } => {
+                    if size <= 2 * 8 {
+                        let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
+                            size_align_offsets.clone()
+                        } else {
+                            source
+                                .structs
+                                .get(name.as_ref().unwrap())
+                                .and_then(|x| x.as_ref())
+                                .and_then(|x| x.get_struct_size_align_offsets())
+                                .and_then(|x| x.as_ref()).cloned()
+                        } ) else {unreachable!()};
+
+                        let Some(fields) = (if fields.is_some() {
+                            fields.clone()
+                        } else {
+                            source
+                                .structs
+                                .get(name.as_ref().unwrap())
+                                .and_then(|x| x.as_ref())
+                                .and_then(|x| x.get_struct_fields())
+                                .and_then(|x| x.as_ref()).cloned()
+                        } ) else {unreachable!()};
+
+                        let mut j = 0;
+                        let mut x: Vec<RegisterCouple> =
+                            vec![RegisterCouple::MergedToPrevious; offsets.len()];
+                        while j < offsets.len() {
+                            match &*fields[j] {
+                                ir::Dtype::Int { width: 32, .. } => {
+                                    if j < offsets.len() - 1 {
+                                        // check the next one
+                                        match &*fields[j + 1] {
+                                            ir::Dtype::Int { width: 32, .. }
+                                            | ir::Dtype::Float { width: 32, .. } => {
+                                                x[j] = RegisterCouple::Double(Register::arg(
+                                                    asm::RegisterType::Integer,
+                                                    next_int_reg,
+                                                ));
+                                                next_int_reg += 1;
+                                                x[j + 1] = RegisterCouple::MergedToPrevious;
+                                                j += 2;
+                                            }
+                                            ir::Dtype::Int { width: 64, .. }
+                                            | ir::Dtype::Float { width: 64, .. } => {}
+                                            _ => unreachable!(),
+                                        }
+                                    } else {
+                                        x[j] = RegisterCouple::Single(Register::arg(
+                                            asm::RegisterType::Integer,
+                                            next_int_reg,
+                                        ));
+                                        next_int_reg += 1;
+                                        j += 1;
+                                    }
+                                }
+                                ir::Dtype::Int { width: 64, .. } => {
+                                    x[j] = RegisterCouple::Single(Register::arg(
+                                        asm::RegisterType::Integer,
+                                        next_int_reg,
+                                    ));
+                                    next_int_reg += 1;
+                                    j += 1;
+                                }
+                                ir::Dtype::Float { width: 32, .. } => {
+                                    if j == offsets.len() - 1 {
+                                        x[j] = RegisterCouple::Single(Register::arg(
+                                            asm::RegisterType::FloatingPoint,
+                                            next_float_reg,
+                                        ));
+                                        next_float_reg += 1;
+                                        j += 1;
+                                    } else {
+                                        match &*fields[j + 1] {
+                                            ir::Dtype::Int { width: 32, .. } => {
+                                                x[j] = RegisterCouple::Double(Register::arg(
+                                                    asm::RegisterType::Integer,
+                                                    next_int_reg,
+                                                ));
+                                                next_int_reg += 1;
+                                                x[j + 1] = RegisterCouple::MergedToPrevious;
+                                                j += 2;
+                                            }
+                                            ir::Dtype::Float { width: 32, .. } => {
+                                                x[j] = RegisterCouple::Single(Register::arg(
+                                                    asm::RegisterType::FloatingPoint,
+                                                    next_float_reg,
+                                                ));
+                                                next_float_reg += 1;
+                                                x[j + 1] = RegisterCouple::Single(Register::arg(
+                                                    asm::RegisterType::FloatingPoint,
+                                                    next_float_reg,
+                                                ));
+                                                next_float_reg += 1;
+                                                j += 2;
+                                            }
+                                            ir::Dtype::Int { width: 64, .. }
+                                            | ir::Dtype::Float { width: 64, .. } => {
+                                                x[j] = RegisterCouple::Single(Register::arg(
+                                                    asm::RegisterType::FloatingPoint,
+                                                    next_float_reg,
+                                                ));
+                                                next_float_reg += 1;
+                                                j += 1;
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                }
+                                ir::Dtype::Float { width: 64, .. } => {
+                                    x[j] = RegisterCouple::Single(Register::arg(
+                                        asm::RegisterType::FloatingPoint,
+                                        next_float_reg,
+                                    ));
+                                    next_float_reg += 1;
+                                    j += 1;
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        params[i] = Some(Alloc::StructInRegister(x));
+                    } else {
+                        // use pointer
+                        while caller_alloc % align != 0 {
+                            caller_alloc += 1;
+                        }
+                        caller_alloc += size;
+                        params[i] = Some(Alloc::Stack {
+                            offset_to_s0: caller_alloc.try_into().unwrap(),
+                        });
                     }
-                    caller_alloc += size;
-                    params[i] = Some(Alloc::Stack {
-                        offset_to_s0: caller_alloc.try_into().unwrap(),
-                    });
                 }
                 ir::Dtype::Array { .. } => unimplemented!(),
                 ir::Dtype::Function { .. } => unimplemented!(),
@@ -2390,7 +2645,7 @@ impl FunctionSignature {
 
         for x in params.iter_mut() {
             match x {
-                Some(Alloc::Reg(..)) => {}
+                Some(Alloc::Reg(..)) | Some(Alloc::StructInRegister(..)) => {}
                 Some(Alloc::Stack { offset_to_s0 }) => {
                     let offset_to_s0: usize = (*offset_to_s0).try_into().unwrap();
                     *x = Some(Alloc::Stack {
