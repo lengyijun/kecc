@@ -1554,10 +1554,22 @@ fn translate_block(
                 }
             }
             ir::Instruction::GetElementPtr {
-                ptr: ptr @ ir::Operand::Register { .. },
+                ptr,
                 offset,
                 dtype: dtype @ ir::Dtype::Pointer { .. },
             } => {
+                match ptr {
+                    ir::Operand::Constant(ir::Constant::GlobalVariable { name, .. }) => {
+                        res.push(asm::Instruction::Pseudo(Pseudo::La {
+                            rd: Register::T0,
+                            symbol: Label(name.clone()),
+                        }));
+                    }
+                    ptr @ ir::Operand::Register { .. } => {
+                        operand2reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
+                    }
+                    _ => unreachable!(),
+                }
                 operand2reg(
                     offset.clone(),
                     Register::T1,
@@ -1565,38 +1577,8 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                operand2reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
                 res.push(asm::Instruction::RType {
                     instr: RType::add(dtype.clone()),
-                    rd: Register::T0,
-                    rs1: Register::T0,
-                    rs2: Some(Register::T1),
-                });
-                res.extend(mk_stype(
-                    SType::store(dtype.clone()),
-                    Register::S0,
-                    Register::T0,
-                    *destination,
-                ));
-            }
-            ir::Instruction::GetElementPtr {
-                ptr: ir::Operand::Constant(ir::Constant::GlobalVariable { name, .. }),
-                offset,
-                dtype: dtype @ ir::Dtype::Pointer { .. },
-            } => {
-                operand2reg(
-                    offset.clone(),
-                    Register::T1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                res.push(asm::Instruction::Pseudo(Pseudo::La {
-                    rd: Register::T0,
-                    symbol: Label(name.clone()),
-                }));
-                res.push(asm::Instruction::RType {
-                    instr: RType::Add(DataSize::Word),
                     rd: Register::T0,
                     rs1: Register::T0,
                     rs2: Some(Register::T1),
