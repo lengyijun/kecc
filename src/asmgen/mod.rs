@@ -107,7 +107,7 @@ fn translate_function(
     // s0
     stack_offset_2_s0 -= 8;
 
-    let mut register_mp: HashMap<RegisterId, i64> = HashMap::new();
+    let mut register_mp: HashMap<RegisterId, DirectOrInDirect<i64>> = HashMap::new();
 
     let mut alloc_arg = vec![];
 
@@ -117,7 +117,7 @@ fn translate_function(
             aid,
         };
         match alloc {
-            Alloc::Reg(reg) => {
+            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
                 let (size, align) = dtype.size_align_of(&source.structs).unwrap();
                 let align: i64 = align.max(4).try_into().unwrap();
                 while stack_offset_2_s0 % align != 0 {
@@ -130,10 +130,28 @@ fn translate_function(
                     *reg,
                     stack_offset_2_s0,
                 ));
-                let None = register_mp.insert(register_id, stack_offset_2_s0 ) else {unreachable!()};
+                let None = register_mp.insert(register_id,  DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
             }
-            Alloc::Stack { offset_to_s0 } => {
-                let None = register_mp.insert(register_id, *offset_to_s0 ) else {unreachable!()};
+            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 })) => {
+                let None = register_mp.insert(register_id, DirectOrInDirect::Direct(*offset_to_s0)) else {unreachable!()};
+            }
+            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
+                while stack_offset_2_s0 % 8 != 0 {
+                    stack_offset_2_s0 -= 1;
+                }
+                stack_offset_2_s0 -= 8;
+                alloc_arg.extend(mk_stype(
+                    SType::Store(DataSize::Double),
+                    Register::S0,
+                    *reg,
+                    stack_offset_2_s0,
+                ));
+                let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(stack_offset_2_s0)) else {unreachable!()};
+            }
+            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                offset_to_s0,
+            })) => {
+                let None = register_mp.insert(register_id, DirectOrInDirect::InDirect(*offset_to_s0)) else {unreachable!()};
             }
             Alloc::StructInRegister(v) => {
                 let ir::Dtype::Struct { name, size_align_offsets , fields, ..} = dtype else {unreachable!()};
@@ -188,7 +206,7 @@ fn translate_function(
                         RegisterCouple::MergedToPrevious => {}
                     }
                 }
-                let None = register_mp.insert(register_id, stack_offset_2_s0 ) else {unreachable!()};
+                let None = register_mp.insert(register_id, DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
             }
         }
     }
@@ -217,7 +235,7 @@ fn translate_function(
             Register::T0,
             stack_offset_2_s0,
         ));
-        let None = register_mp.insert(RegisterId::Local { aid }, stack_offset_2_s0 ) else {unreachable!()};
+        let None = register_mp.insert(RegisterId::Local { aid }, DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
     }
 
     for (&bid, block) in definition
@@ -232,7 +250,7 @@ fn translate_function(
                 stack_offset_2_s0 -= 1;
             }
             stack_offset_2_s0 -= size.max(4) as i64;
-            let None = register_mp.insert(RegisterId::Arg { bid, aid }, stack_offset_2_s0 ) else {unreachable!()};
+            let None = register_mp.insert(RegisterId::Arg { bid, aid }, DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
         }
     }
 
@@ -245,7 +263,7 @@ fn translate_function(
                 stack_offset_2_s0 -= 1;
             }
             stack_offset_2_s0 -= size.max(4) as i64;
-            let None = register_mp.insert(RegisterId::Temp { bid , iid }, stack_offset_2_s0 ) else {unreachable!()};
+            let None = register_mp.insert(RegisterId::Temp { bid , iid },DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
         }
     }
 
@@ -352,7 +370,7 @@ fn translate_block(
     definition: &ir::FunctionDefinition,
     block: &ir::Block,
     temp_block: &mut Vec<asm::Block>,
-    register_mp: &HashMap<RegisterId, i64>,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     abi: &FunctionAbi,
@@ -362,7 +380,7 @@ fn translate_block(
     let mut res = vec![];
 
     for (iid, instr) in block.instructions.iter().enumerate() {
-        let Some(  destination  ) = register_mp.get(&RegisterId::Temp { bid, iid }) else {unreachable!()};
+        let Some(DirectOrInDirect::Direct(destination)) = register_mp.get(&RegisterId::Temp { bid, iid }) else {unreachable!()};
         match &**instr {
             ir::Instruction::UnaryOp {
                 op,
@@ -1198,12 +1216,8 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                res.extend(mk_itype(
-                    IType::LD,
-                    Register::T0,
-                    Register::S0,
-                    *register_mp.get(rid).unwrap(),
-                ));
+                let DirectOrInDirect::Direct(destination) = *register_mp.get(rid).unwrap() else {unreachable!()};
+                res.extend(mk_itype(IType::LD, Register::T0, Register::S0, destination));
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
                     rs1: Register::T0,
@@ -1226,12 +1240,8 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                res.extend(mk_itype(
-                    IType::LD,
-                    Register::T0,
-                    Register::S0,
-                    *register_mp.get(rid).unwrap(),
-                ));
+                let DirectOrInDirect::Direct(destination) = *register_mp.get(rid).unwrap() else {unreachable!()};
+                res.extend(mk_itype(IType::LD, Register::T0, Register::S0, destination));
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
                     rs1: Register::T0,
@@ -1261,14 +1271,32 @@ fn translate_block(
                         dtype,
                     },
             } => {
-                cp_to_indirect_target(
-                    (Register::S0, *register_mp.get(value_rid).unwrap()),
-                    (Register::S0, *register_mp.get(ptr_rid).unwrap() as u64),
-                    0,
-                    dtype.clone(),
-                    &mut res,
-                    source,
-                );
+                match (
+                    register_mp.get(value_rid).unwrap(),
+                    register_mp.get(ptr_rid).unwrap(),
+                ) {
+                    (DirectOrInDirect::Direct(src), DirectOrInDirect::Direct(dest)) => {
+                        cp_to_indirect_target(
+                            (Register::S0, *src),
+                            (Register::S0, *dest as u64),
+                            0,
+                            dtype.clone(),
+                            &mut res,
+                            source,
+                        );
+                    }
+                    (DirectOrInDirect::InDirect(src), DirectOrInDirect::Direct(dest)) => {
+                        cp_from_indirect_to_indirect(
+                            (Register::S0, *src as u64),
+                            (Register::S0, *dest as u64),
+                            0,
+                            dtype.clone(),
+                            &mut res,
+                            source,
+                        );
+                    }
+                    (_, DirectOrInDirect::InDirect(_)) => unreachable!(),
+                }
             }
             ir::Instruction::Store {
                 ptr:
@@ -1296,17 +1324,19 @@ fn translate_block(
                         rid,
                         dtype: ir::Dtype::Pointer { inner, .. },
                     },
-            } => {
-                let offset_to_s0 = *register_mp.get(rid).unwrap();
-                cp_from_indirect_source(
-                    (Register::S0, offset_to_s0 as u64),
-                    *destination,
-                    0,
-                    (**inner).clone(),
-                    &mut res,
-                    source,
-                );
-            }
+            } => match register_mp.get(rid).unwrap() {
+                DirectOrInDirect::Direct(offset_to_s0) => {
+                    cp_from_indirect_source(
+                        (Register::S0, *offset_to_s0 as u64),
+                        *destination,
+                        0,
+                        (**inner).clone(),
+                        &mut res,
+                        source,
+                    );
+                }
+                DirectOrInDirect::InDirect(_) => unimplemented!(),
+            },
             ir::Instruction::Load {
                 ptr:
                     ir::Operand::Constant(ir::Constant::GlobalVariable {
@@ -1394,13 +1424,18 @@ fn translate_block(
                         -(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap()),
                     ));
                 }
-                for (param, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
-                    match (alloc, param) {
-                        (Alloc::Reg(reg), _) => {
-                            operand2reg(param.clone(), reg, &mut res, register_mp, float_mp);
+                for (operand, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
+                    match (alloc, operand) {
+                        (
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))),
+                            _,
+                        ) => {
+                            operand2reg(operand.clone(), reg, &mut res, register_mp, float_mp);
                         }
                         (
-                            Alloc::Stack { offset_to_s0 },
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                                offset_to_s0,
+                            })),
                             ir::Operand::Constant(ir::Constant::Int { value, .. }),
                         ) => {
                             assert!(offset_to_s0 > 0);
@@ -1416,7 +1451,9 @@ fn translate_block(
                             ));
                         }
                         (
-                            Alloc::Stack { offset_to_s0 },
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                                offset_to_s0,
+                            })),
                             operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
                         ) => {
                             assert!(offset_to_s0 > 0);
@@ -1434,16 +1471,60 @@ fn translate_block(
                                 offset_to_s0,
                             ));
                         }
-                        (Alloc::Stack { offset_to_s0 }, ir::Operand::Register { rid, dtype }) => {
-                            assert!(offset_to_s0 > 0);
-                            cp(
-                                (Register::S0, *register_mp.get(rid).unwrap()),
-                                (Register::Sp, offset_to_s0),
-                                dtype.clone(),
-                                &mut res,
-                                source,
-                            );
+                        (
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                                ..
+                            })),
+                            ir::Operand::Register { .. },
+                        ) => {
+                            unreachable!("{dtype}")
                         }
+                        (
+                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
+                            ir::Operand::Register { rid, .. },
+                        ) => match register_mp.get(rid).unwrap() {
+                            DirectOrInDirect::Direct(x) => {
+                                res.extend(mk_itype(
+                                    IType::Addi(DataSize::Double),
+                                    reg,
+                                    Register::S0,
+                                    *x,
+                                ));
+                            }
+                            DirectOrInDirect::InDirect(x) => {
+                                res.extend(mk_itype(IType::LD, reg, Register::S0, *x));
+                            }
+                        },
+                        (
+                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                                offset_to_s0,
+                            })),
+                            ir::Operand::Register { rid, .. },
+                        ) => match register_mp.get(rid).unwrap() {
+                            DirectOrInDirect::Direct(x) => {
+                                res.extend(mk_itype(
+                                    IType::Addi(DataSize::Double),
+                                    Register::T0,
+                                    Register::S0,
+                                    *x,
+                                ));
+                                res.extend(mk_stype(
+                                    SType::Store(DataSize::Double),
+                                    Register::Sp,
+                                    Register::T0,
+                                    offset_to_s0,
+                                ));
+                            }
+                            DirectOrInDirect::InDirect(x) => {
+                                res.extend(mk_itype(IType::LD, Register::T0, Register::S0, *x));
+                                res.extend(mk_stype(
+                                    SType::Store(DataSize::Double),
+                                    Register::Sp,
+                                    Register::T0,
+                                    offset_to_s0,
+                                ));
+                            }
+                        },
                         (
                             Alloc::StructInRegister(v),
                             ir::Operand::Register {
@@ -1457,7 +1538,7 @@ fn translate_block(
                                     },
                             },
                         ) => {
-                            let base_offset = *register_mp.get(rid).unwrap();
+                            let DirectOrInDirect::Direct(base_offset) = *register_mp.get(rid).unwrap() else {unreachable!()};
 
                             let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
                                 size_align_offsets.clone()
@@ -1538,6 +1619,7 @@ fn translate_block(
                         rid,
                         dtype: ir::Dtype::Pointer { .. },
                     } => {
+                        let DirectOrInDirect::Direct(t) = register_mp.get(rid).unwrap() else {unreachable!()};
                         res.extend(mk_itype(
                             IType::Load {
                                 data_size: DataSize::Word,
@@ -1545,7 +1627,7 @@ fn translate_block(
                             },
                             Register::T6,
                             Register::S0,
-                            *register_mp.get(rid).unwrap(),
+                            *t,
                         ));
                         res.push(asm::Instruction::Pseudo(Pseudo::Jalr { rs: Register::T6 }));
                     }
@@ -1817,16 +1899,19 @@ fn translate_block(
                 (RetLocation::OnStack, ir::Dtype::Array { .. }) => unimplemented!(),
                 (RetLocation::OnStack, ir::Dtype::Struct { .. }) => match value {
                     ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
-                    ir::Operand::Register { rid, dtype } => {
-                        cp_to_indirect_target(
-                            (Register::S0, *register_mp.get(rid).unwrap()),
-                            (Register::S0, 0),
-                            0,
-                            dtype.clone(),
-                            &mut res,
-                            source,
-                        );
-                    }
+                    ir::Operand::Register { rid, dtype } => match register_mp.get(rid).unwrap() {
+                        DirectOrInDirect::Direct(dest) => {
+                            cp_to_indirect_target(
+                                (Register::S0, *dest),
+                                (Register::S0, 0),
+                                0,
+                                dtype.clone(),
+                                &mut res,
+                                source,
+                            );
+                        }
+                        DirectOrInDirect::InDirect(_) => unimplemented!(),
+                    },
                     _ => unreachable!(),
                 },
                 (RetLocation::OnStack, ir::Dtype::Function { .. }) => unreachable!(),
@@ -1860,18 +1945,18 @@ fn gen_jump_arg(
     func_name: &str,
     jump_arg: &ir::JumpArg,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, i64>,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
     definition: &ir::FunctionDefinition,
     float_mp: &mut FloatMp,
 ) {
     let target_block = definition.blocks.get(&jump_arg.bid).unwrap();
     for (aid, (_dtype, operand)) in izip!(&target_block.phinodes, &jump_arg.args).enumerate() {
-        let target_offset = register_mp
+        let DirectOrInDirect::Direct(target_offset) = register_mp
             .get(&RegisterId::Arg {
                 bid: jump_arg.bid,
                 aid,
             })
-            .unwrap();
+            .unwrap() else {unreachable!()};
         operand_to_stack(
             operand.clone(),
             *target_offset as u64,
@@ -1889,7 +1974,7 @@ fn operand2reg(
     operand: ir::Operand,
     register: Register,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, i64>,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
     float_mp: &mut FloatMp,
 ) {
     match operand {
@@ -1933,7 +2018,7 @@ fn operand2reg(
             });
         }
         ir::Operand::Register { rid, dtype } => {
-            let offset_to_s0 = register_mp.get(&rid).unwrap();
+            let DirectOrInDirect::Direct(offset_to_s0 )= register_mp.get(&rid).unwrap() else {unreachable!()};
             res.extend(mk_itype(
                 IType::load(dtype),
                 register,
@@ -1949,7 +2034,7 @@ fn operand_to_stack(
     operand: ir::Operand,
     target_base_to_s0: u64,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, i64>,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
     float_mp: &mut FloatMp,
 ) {
     match operand.dtype() {
@@ -2190,56 +2275,75 @@ fn cp_to_indirect_target(
     }
 }
 
-fn cp(
-    (source_reg, source_base): (Register, i64), // direct
-    (target_reg, target_base): (Register, i64), // direct
+fn cp_from_indirect_to_indirect(
+    (source_reg, source_base): (Register, u64),
+    (target_reg, target_base): (Register, u64),
+    offset: i64,
     dtype: ir::Dtype,
     res: &mut Vec<asm::Instruction>,
     source: &ir::TranslationUnit,
 ) {
+    assert!(offset >= 0);
     match &dtype {
         ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
             res.extend(mk_itype(
-                IType::load(dtype.clone()),
+                IType::LD,
                 Register::T0,
                 source_reg,
-                source_base,
+                source_base as i64,
+            ));
+            res.extend(mk_itype(
+                IType::load(dtype.clone()),
+                Register::T0,
+                Register::T0,
+                offset,
+            ));
+            res.extend(mk_itype(
+                IType::LD,
+                Register::T1,
+                target_reg,
+                target_base as i64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                target_reg,
+                Register::T1,
                 Register::T0,
-                target_base,
+                offset,
             ));
         }
         ir::Dtype::Float { .. } => {
             res.extend(mk_itype(
+                IType::LD,
+                Register::T0,
+                source_reg,
+                source_base as i64,
+            ));
+            res.extend(mk_itype(
                 IType::load(dtype.clone()),
                 Register::FT0,
-                source_reg,
-                source_base,
+                Register::T0,
+                offset,
+            ));
+            res.extend(mk_itype(
+                IType::LD,
+                Register::T1,
+                target_reg,
+                target_base as i64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                target_reg,
+                Register::T1,
                 Register::FT0,
-                target_base,
+                offset,
             ));
         }
         ir::Dtype::Array { inner, size } => {
             let (size_of_inner_type, _) = inner.size_align_of(&source.structs).unwrap();
             for i in 0..*size {
-                cp(
-                    (
-                        source_reg,
-                        source_base
-                            + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
-                    ),
-                    (
-                        target_reg,
-                        target_base
-                            + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
-                    ),
+                cp_from_indirect_to_indirect(
+                    (source_reg, source_base),
+                    (target_reg, target_base),
+                    offset + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
                     (**inner).clone(),
                     res,
                     source,
@@ -2274,15 +2378,10 @@ fn cp(
             } ) else {unreachable!()};
 
             for (dtype, field_offset) in izip!(fields, offsets) {
-                cp(
-                    (
-                        source_reg,
-                        source_base + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
-                    ),
-                    (
-                        target_reg,
-                        target_base + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
-                    ),
+                cp_from_indirect_to_indirect(
+                    (source_reg, source_base),
+                    (target_reg, target_base),
+                    offset + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
                     dtype.into_inner(),
                     res,
                     source,
@@ -2416,10 +2515,15 @@ enum RegisterCouple {
     MergedToPrevious,
 }
 
-#[derive(Debug, Clone)]
-enum Alloc {
+#[derive(Debug, Clone, Copy)]
+enum RegOrStack {
     Reg(Register),
     Stack { offset_to_s0: i64 },
+}
+
+#[derive(Debug, Clone)]
+enum Alloc {
+    PrimitiveType(DirectOrInDirect<RegOrStack>),
     StructInRegister(Vec<RegisterCouple>),
 }
 
@@ -2427,6 +2531,12 @@ enum Alloc {
 enum RetLocation {
     OnStack,
     InRegister,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectOrInDirect<T: Clone + Copy> {
+    Direct(T),
+    InDirect(T),
 }
 
 #[derive(Clone)]
@@ -2440,7 +2550,11 @@ struct FunctionAbi {
 
 impl FunctionSignature {
     fn try_alloc(&self, source: &ir::TranslationUnit) -> FunctionAbi {
-        let mut params: Vec<Alloc> = vec![Alloc::Reg(Register::A0); self.params.len()];
+        let mut params: Vec<Alloc> =
+            vec![
+                Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(Register::A0)));
+                self.params.len()
+            ];
 
         let mut next_int_reg: usize = 0;
         let mut next_float_reg: usize = 0;
@@ -2456,12 +2570,15 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = Alloc::Stack {
-                            offset_to_s0: caller_alloc.try_into().unwrap(),
-                        };
+                        params[i] =
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                                offset_to_s0: caller_alloc.try_into().unwrap(),
+                            }));
                     } else {
                         params[i] =
-                            Alloc::Reg(Register::arg(asm::RegisterType::Integer, next_int_reg));
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                                Register::arg(asm::RegisterType::Integer, next_int_reg),
+                            )));
                         next_int_reg += 1;
                     }
                 }
@@ -2471,14 +2588,15 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = Alloc::Stack {
-                            offset_to_s0: caller_alloc.try_into().unwrap(),
-                        };
+                        params[i] =
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                                offset_to_s0: caller_alloc.try_into().unwrap(),
+                            }));
                     } else {
-                        params[i] = Alloc::Reg(Register::arg(
-                            asm::RegisterType::FloatingPoint,
-                            next_float_reg,
-                        ));
+                        params[i] =
+                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                                Register::arg(asm::RegisterType::FloatingPoint, next_float_reg),
+                            )));
                         next_float_reg += 1;
                     }
                 }
@@ -2609,14 +2727,23 @@ impl FunctionSignature {
                         }
                         params[i] = Alloc::StructInRegister(x);
                     } else {
-                        // use pointer
-                        while caller_alloc % align != 0 {
-                            caller_alloc += 1;
+                        if next_int_reg > 7 {
+                            while caller_alloc % 8 != 0 {
+                                caller_alloc += 1;
+                            }
+                            caller_alloc += 8;
+                            params[i] = Alloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                RegOrStack::Stack {
+                                    offset_to_s0: caller_alloc.try_into().unwrap(),
+                                },
+                            ));
+                        } else {
+                            params[i] =
+                                Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
+                                    Register::arg(asm::RegisterType::Integer, next_int_reg),
+                                )));
+                            next_int_reg += 1;
                         }
-                        caller_alloc += size;
-                        params[i] = Alloc::Stack {
-                            offset_to_s0: caller_alloc.try_into().unwrap(),
-                        };
                     }
                 }
                 ir::Dtype::Array { .. } => unimplemented!(),
@@ -2643,13 +2770,18 @@ impl FunctionSignature {
 
         for x in params.iter_mut() {
             match x {
-                Alloc::Reg(..) | Alloc::StructInRegister(..) => {}
-                Alloc::Stack { offset_to_s0 } => {
-                    let offset_to_s0: usize = (*offset_to_s0).try_into().unwrap();
-                    *x = Alloc::Stack {
-                        offset_to_s0: (caller_alloc - offset_to_s0).try_into().unwrap(),
-                    };
+                Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                    offset_to_s0,
+                }))
+                | Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                    offset_to_s0,
+                })) => {
+                    *offset_to_s0 = (caller_alloc
+                        - <i64 as TryInto<usize>>::try_into(*offset_to_s0).unwrap())
+                    .try_into()
+                    .unwrap();
                 }
+                _ => {}
             }
         }
 
