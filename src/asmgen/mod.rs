@@ -2440,7 +2440,7 @@ struct FunctionAbi {
 
 impl FunctionSignature {
     fn try_alloc(&self, source: &ir::TranslationUnit) -> FunctionAbi {
-        let mut params: Vec<Option<Alloc>> = vec![None; self.params.len()];
+        let mut params: Vec<Alloc> = vec![Alloc::Reg(Register::A0); self.params.len()];
 
         let mut next_int_reg: usize = 0;
         let mut next_float_reg: usize = 0;
@@ -2456,14 +2456,12 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = Some(Alloc::Stack {
+                        params[i] = Alloc::Stack {
                             offset_to_s0: caller_alloc.try_into().unwrap(),
-                        });
+                        };
                     } else {
-                        params[i] = Some(Alloc::Reg(Register::arg(
-                            asm::RegisterType::Integer,
-                            next_int_reg,
-                        )));
+                        params[i] =
+                            Alloc::Reg(Register::arg(asm::RegisterType::Integer, next_int_reg));
                         next_int_reg += 1;
                     }
                 }
@@ -2473,14 +2471,14 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = Some(Alloc::Stack {
+                        params[i] = Alloc::Stack {
                             offset_to_s0: caller_alloc.try_into().unwrap(),
-                        });
+                        };
                     } else {
-                        params[i] = Some(Alloc::Reg(Register::arg(
+                        params[i] = Alloc::Reg(Register::arg(
                             asm::RegisterType::FloatingPoint,
                             next_float_reg,
-                        )));
+                        ));
                         next_float_reg += 1;
                     }
                 }
@@ -2609,16 +2607,16 @@ impl FunctionSignature {
                                 _ => unreachable!(),
                             }
                         }
-                        params[i] = Some(Alloc::StructInRegister(x));
+                        params[i] = Alloc::StructInRegister(x);
                     } else {
                         // use pointer
                         while caller_alloc % align != 0 {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = Some(Alloc::Stack {
+                        params[i] = Alloc::Stack {
                             offset_to_s0: caller_alloc.try_into().unwrap(),
-                        });
+                        };
                     }
                 }
                 ir::Dtype::Array { .. } => unimplemented!(),
@@ -2645,20 +2643,19 @@ impl FunctionSignature {
 
         for x in params.iter_mut() {
             match x {
-                Some(Alloc::Reg(..)) | Some(Alloc::StructInRegister(..)) => {}
-                Some(Alloc::Stack { offset_to_s0 }) => {
+                Alloc::Reg(..) | Alloc::StructInRegister(..) => {}
+                Alloc::Stack { offset_to_s0 } => {
                     let offset_to_s0: usize = (*offset_to_s0).try_into().unwrap();
-                    *x = Some(Alloc::Stack {
+                    *x = Alloc::Stack {
                         offset_to_s0: (caller_alloc - offset_to_s0).try_into().unwrap(),
-                    });
+                    };
                 }
-                None => unreachable!(),
             }
         }
 
         FunctionAbi {
             ret_alloc,
-            params_alloc: params.into_iter().map(|x| x.unwrap()).collect(),
+            params_alloc: params,
             caller_alloc,
         }
     }
