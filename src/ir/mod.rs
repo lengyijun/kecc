@@ -817,7 +817,7 @@ impl Constant {
     }
 
     #[inline]
-    fn minus(self) -> Self {
+    pub fn minus(self) -> Self {
         match self {
             Self::Int {
                 value,
