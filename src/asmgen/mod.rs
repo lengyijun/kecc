@@ -1809,7 +1809,15 @@ fn translate_block(
                 register_mp,
                 float_mp,
             );
-            let (else_label, else_block) = new_tmp_block(func_name, bid, arg_else.bid, temp_block);
+            let else_label = gen_jump_arg_or_new_block(
+                func_name,
+                bid,
+                arg_else,
+                register_mp,
+                definition,
+                float_mp,
+                temp_block,
+            );
             res.push(asm::Instruction::BType {
                 instr: asm::BType::Beq,
                 rs1: Register::T0,
@@ -1820,14 +1828,6 @@ fn translate_block(
                 func_name,
                 arg_then,
                 &mut res,
-                register_mp,
-                definition,
-                float_mp,
-            );
-            gen_jump_arg(
-                func_name,
-                arg_else,
-                else_block,
                 register_mp,
                 definition,
                 float_mp,
@@ -1846,15 +1846,14 @@ fn translate_block(
                     rd: Register::T1,
                     imm: *value as u64,
                 }));
-                let (then_label, then_block) =
-                    new_tmp_block(func_name, bid, jump_arg.bid, temp_block);
-                gen_jump_arg(
+                let then_label = gen_jump_arg_or_new_block(
                     func_name,
+                    bid,
                     jump_arg,
-                    then_block,
                     register_mp,
                     definition,
                     float_mp,
+                    temp_block,
                 );
                 res.push(asm::Instruction::BType {
                     instr: asm::BType::Beq,
@@ -1921,21 +1920,6 @@ fn translate_block(
     res
 }
 
-fn new_tmp_block<'a>(
-    func_name: &str,
-    from: BlockId,
-    to: BlockId,
-    temp_block: &'a mut Vec<asm::Block>,
-) -> (Label, &'a mut Vec<asm::Instruction>) {
-    let label = Label(format!(".{func_name}_{from}_{to}"));
-    temp_block.push(asm::Block {
-        label: Some(label.clone()),
-        instructions: vec![],
-    });
-
-    (label, &mut temp_block.last_mut().unwrap().instructions)
-}
-
 // prepare args to jump block
 fn gen_jump_arg(
     func_name: &str,
@@ -1964,6 +1948,31 @@ fn gen_jump_arg(
     res.push(asm::Instruction::Pseudo(Pseudo::J {
         offset: Label::new(func_name, jump_arg.bid),
     }));
+}
+
+fn gen_jump_arg_or_new_block(
+    func_name: &str,
+    from: BlockId,
+    jump_arg: &ir::JumpArg,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
+    definition: &ir::FunctionDefinition,
+    float_mp: &mut FloatMp,
+    temp_block: &mut Vec<asm::Block>,
+) -> Label {
+    if jump_arg.args.is_empty() {
+        Label::new(func_name, jump_arg.bid)
+    } else {
+        let label = Label(format!(".{func_name}_{from}_{}", jump_arg.bid));
+        temp_block.push(asm::Block {
+            label: Some(label.clone()),
+            instructions: vec![],
+        });
+        let res: &mut Vec<asm::Instruction> = &mut temp_block.last_mut().unwrap().instructions;
+
+        gen_jump_arg(func_name, jump_arg, res, register_mp, definition, float_mp);
+
+        label
+    }
 }
 
 fn operand2reg(
