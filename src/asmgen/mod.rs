@@ -2726,24 +2726,21 @@ impl FunctionSignature {
                             }
                         }
                         params[i] = Alloc::StructInRegister(x);
-                    } else {
-                        if next_int_reg > 7 {
-                            while caller_alloc % 8 != 0 {
-                                caller_alloc += 1;
-                            }
-                            caller_alloc += 8;
-                            params[i] = Alloc::PrimitiveType(DirectOrInDirect::InDirect(
-                                RegOrStack::Stack {
-                                    offset_to_s0: caller_alloc.try_into().unwrap(),
-                                },
-                            ));
-                        } else {
-                            params[i] =
-                                Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
-                                    Register::arg(asm::RegisterType::Integer, next_int_reg),
-                                )));
-                            next_int_reg += 1;
+                    } else if next_int_reg > 7 {
+                        while caller_alloc % 8 != 0 {
+                            caller_alloc += 1;
                         }
+                        caller_alloc += 8;
+                        params[i] =
+                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                                offset_to_s0: caller_alloc.try_into().unwrap(),
+                            }));
+                    } else {
+                        params[i] =
+                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
+                                Register::arg(asm::RegisterType::Integer, next_int_reg),
+                            )));
+                        next_int_reg += 1;
                     }
                 }
                 ir::Dtype::Array { .. } => unimplemented!(),
