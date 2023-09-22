@@ -31,11 +31,15 @@ impl Translate<ir::TranslationUnit> for Asmgen {
         // init global variable first
         for (label, decl) in &source.decls {
             let Declaration::Variable { dtype, initializer } = decl else { continue };
+            let (_, align) = dtype.size_align_of(&source.structs).unwrap();
 
             let directives = initializer_2_directive(dtype.clone(), initializer.clone(), source);
 
             asm.unit.variables.push(Section {
-                header: vec![Directive::Section(asm::SectionType::Data)],
+                header: vec![
+                    Directive::Section(asm::SectionType::Data),
+                    Directive::Align(align),
+                ],
                 body: asm::Variable {
                     label: Label(label.clone()),
                     directives,
