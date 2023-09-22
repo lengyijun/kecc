@@ -591,6 +591,52 @@ fn translate_block(
             }
             ir::Instruction::BinOp {
                 op: BinaryOperator::Plus,
+                lhs: x,
+                rhs: ir::Operand::Constant(ir::Constant::Int { value: 0, .. }),
+                dtype: dtype @ ir::Dtype::Int { .. },
+            }
+            | ir::Instruction::BinOp {
+                op: BinaryOperator::Plus,
+                lhs: ir::Operand::Constant(ir::Constant::Int { value: 0, .. }),
+                rhs: x,
+                dtype: dtype @ ir::Dtype::Int { .. },
+            } => {
+                operand2reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
+                res.extend(mk_stype(
+                    SType::store(dtype.clone()),
+                    Register::S0,
+                    Register::T0,
+                    *destination,
+                ));
+            }
+            ir::Instruction::BinOp {
+                op: BinaryOperator::Plus,
+                lhs: x,
+                rhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
+                dtype: dtype @ ir::Dtype::Int { .. },
+            }
+            | ir::Instruction::BinOp {
+                op: BinaryOperator::Plus,
+                lhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
+                rhs: x,
+                dtype: dtype @ ir::Dtype::Int { .. },
+            } => {
+                operand2reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
+                res.extend(mk_itype(
+                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                    Register::T0,
+                    Register::T0,
+                    *value as u64 as i64,
+                ));
+                res.extend(mk_stype(
+                    SType::store(dtype.clone()),
+                    Register::S0,
+                    Register::T0,
+                    *destination,
+                ));
+            }
+            ir::Instruction::BinOp {
+                op: BinaryOperator::Plus,
                 lhs,
                 rhs,
                 dtype: dtype @ ir::Dtype::Int { .. },
@@ -760,6 +806,48 @@ fn translate_block(
                 ));
             }
 
+            ir::Instruction::BinOp {
+                op: BinaryOperator::Equals,
+                lhs: x,
+                rhs:
+                    ir::Operand::Constant(
+                        c @ ir::Constant::Int {
+                            is_signed: true, ..
+                        },
+                    ),
+                dtype: target_dtype @ ir::Dtype::Int { .. },
+            }
+            | ir::Instruction::BinOp {
+                op: BinaryOperator::Equals,
+                rhs: x,
+                lhs:
+                    ir::Operand::Constant(
+                        c @ ir::Constant::Int {
+                            is_signed: true, ..
+                        },
+                    ),
+                dtype: target_dtype @ ir::Dtype::Int { .. },
+            } => {
+                operand2reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
+                let c = c.clone().minus();
+                let ir::Constant::Int { value, .. } = c else {unreachable!()};
+                res.extend(mk_itype(
+                    IType::Addi(DataSize::try_from(x.dtype()).unwrap()),
+                    Register::T0,
+                    Register::T0,
+                    value as u64 as i64,
+                ));
+                res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
+                    rd: Register::T0,
+                    rs: Register::T0,
+                }));
+                res.extend(mk_stype(
+                    SType::store(target_dtype.clone()),
+                    Register::S0,
+                    Register::T0,
+                    *destination,
+                ));
+            }
             ir::Instruction::BinOp {
                 op: BinaryOperator::Equals,
                 lhs,
