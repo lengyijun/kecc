@@ -1620,15 +1620,7 @@ fn translate_block(
                         dtype: ir::Dtype::Pointer { .. },
                     } => {
                         let DirectOrInDirect::Direct(t) = register_mp.get(rid).unwrap() else {unreachable!()};
-                        res.extend(mk_itype(
-                            IType::Load {
-                                data_size: DataSize::Word,
-                                is_signed: false,
-                            },
-                            Register::T6,
-                            Register::S0,
-                            *t,
-                        ));
+                        res.extend(mk_itype(IType::LD, Register::T6, Register::S0, *t));
                         res.push(asm::Instruction::Pseudo(Pseudo::Jalr { rs: Register::T6 }));
                     }
                     _ => unreachable!(),
