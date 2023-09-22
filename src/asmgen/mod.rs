@@ -2459,18 +2459,25 @@ fn initializer_2_directive(
             vec![translate_int_float(&initializer, dtype)]
         }
         ir::Dtype::Array { inner, size } => {
-            let initializer = initializer.map(|x| {
-                let Initializer::List(l) = x else {unreachable!()};
-                l
-            });
-            let mut v = vec![];
-            for i in 0..*size {
-                let initializer: Option<Initializer> = initializer
-                    .as_ref()
-                    .and_then(|l| l.get(i).map(|x| x.node.initializer.node.clone()));
-                v.push(initializer_2_directive(*inner.clone(), initializer, source));
+            let (size_of_inner, _) = inner.size_align_of(&source.structs).unwrap();
+            match initializer {
+                Some(Initializer::List(initializer)) => {
+                    let mut v = vec![];
+                    for x in &initializer {
+                        let y = x.node.initializer.node.clone();
+                        v.extend(initializer_2_directive(*inner.clone(), Some(y), source));
+                    }
+                    let b = size - initializer.len();
+                    if b > 0 {
+                        v.push(Directive::Zero(size_of_inner * b));
+                    }
+                    v
+                }
+                None => {
+                    vec![Directive::Zero(size_of_inner * size)]
+                }
+                _ => unreachable!(),
             }
-            v.into_iter().flatten().collect()
         }
         ir::Dtype::Struct {
             fields,
