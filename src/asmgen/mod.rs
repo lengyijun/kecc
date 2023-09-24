@@ -1506,40 +1506,16 @@ fn translate_block(
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                                 RegOrStack::Stack { offset_to_s0 },
                             )),
-                            ir::Operand::Constant(ir::Constant::Int { value, .. }),
+                            ir::Operand::Constant(..),
                         ) => {
                             assert!(offset_to_s0 > 0);
-                            res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                                rd: Register::T0,
-                                imm: *value as u64,
-                            }));
-                            res.extend(mk_stype(
-                                SType::store(dtype.clone()),
-                                Register::Sp,
-                                Register::T0,
-                                offset_to_s0,
-                            ));
-                        }
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
-                                RegOrStack::Stack { offset_to_s0 },
-                            )),
-                            operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
-                        ) => {
-                            assert!(offset_to_s0 > 0);
-                            operand2reg(
+                            operand_to_stack(
                                 operand.clone(),
-                                Register::FT0,
+                                (Register::Sp, offset_to_s0 as u64),
                                 &mut res,
                                 register_mp,
                                 float_mp,
                             );
-                            res.extend(mk_stype(
-                                SType::store(dtype.clone()),
-                                Register::Sp,
-                                Register::FT0,
-                                offset_to_s0,
-                            ));
                         }
                         (
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
@@ -2008,7 +1984,7 @@ fn gen_jump_arg(
             .unwrap() else {unreachable!()};
         operand_to_stack(
             operand.clone(),
-            *target_offset as u64,
+            (Register::S0, *target_offset as u64),
             res,
             register_mp,
             float_mp,
@@ -2106,29 +2082,30 @@ fn operand2reg(
 
 fn operand_to_stack(
     operand: ir::Operand,
-    target_base_to_s0: u64,
+    (target_register, target_base): (Register, u64),
     res: &mut Vec<asm::Instruction>,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<i64>>,
     float_mp: &mut FloatMp,
 ) {
+    assert!(target_register == Register::Sp || target_register == Register::S0);
     match operand.dtype() {
         ir::Dtype::Unit { .. } => unreachable!(),
         dtype @ (ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. }) => {
             operand2reg(operand, Register::T0, res, register_mp, float_mp);
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::S0,
+                target_register,
                 Register::T0,
-                target_base_to_s0 as i64,
+                target_base as i64,
             ));
         }
         dtype @ ir::Dtype::Float { .. } => {
             operand2reg(operand, Register::FT0, res, register_mp, float_mp);
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::S0,
+                target_register,
                 Register::FT0,
-                target_base_to_s0 as i64,
+                target_base as i64,
             ));
         }
         ir::Dtype::Array { .. } => unreachable!(),
