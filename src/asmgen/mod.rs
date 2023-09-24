@@ -121,7 +121,7 @@ fn translate_function(
             aid,
         };
         match alloc {
-            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
                 let (size, align) = dtype.size_align_of(&source.structs).unwrap();
                 let align: i64 = align.max(4).try_into().unwrap();
                 while stack_offset_2_s0 % align != 0 {
@@ -136,10 +136,12 @@ fn translate_function(
                 ));
                 let None = register_mp.insert(register_id,  DirectOrInDirect::Direct(stack_offset_2_s0)) else {unreachable!()};
             }
-            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 })) => {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                offset_to_s0,
+            })) => {
                 let None = register_mp.insert(register_id, DirectOrInDirect::Direct(*offset_to_s0)) else {unreachable!()};
             }
-            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
                 while stack_offset_2_s0 % 8 != 0 {
                     stack_offset_2_s0 -= 1;
                 }
@@ -152,12 +154,12 @@ fn translate_function(
                 ));
                 let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(stack_offset_2_s0)) else {unreachable!()};
             }
-            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
                 let None = register_mp.insert(register_id, DirectOrInDirect::InDirect(*offset_to_s0)) else {unreachable!()};
             }
-            Alloc::StructInRegister(v) => {
+            ParamAlloc::StructInRegister(v) => {
                 let ir::Dtype::Struct { name, size_align_offsets , fields, ..} = dtype else {unreachable!()};
                 let Some((size, align, offsets)) = (if size_align_offsets.is_some() {
                     size_align_offsets.clone()
@@ -1519,15 +1521,17 @@ fn translate_block(
                 for (operand, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
                     match (alloc, operand) {
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                                reg,
+                            ))),
                             _,
                         ) => {
                             operand2reg(operand.clone(), reg, &mut res, register_mp, float_mp);
                         }
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
-                                offset_to_s0,
-                            })),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                RegOrStack::Stack { offset_to_s0 },
+                            )),
                             ir::Operand::Constant(ir::Constant::Int { value, .. }),
                         ) => {
                             assert!(offset_to_s0 > 0);
@@ -1543,9 +1547,9 @@ fn translate_block(
                             ));
                         }
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
-                                offset_to_s0,
-                            })),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                RegOrStack::Stack { offset_to_s0 },
+                            )),
                             operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
                         ) => {
                             assert!(offset_to_s0 > 0);
@@ -1564,15 +1568,17 @@ fn translate_block(
                             ));
                         }
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
-                                ..
-                            })),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                RegOrStack::Stack { .. },
+                            )),
                             ir::Operand::Register { .. },
                         ) => {
                             unreachable!("{dtype}")
                         }
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
+                                reg,
+                            ))),
                             ir::Operand::Register { rid, .. },
                         ) => match register_mp.get(rid).unwrap() {
                             DirectOrInDirect::Direct(x) => {
@@ -1588,9 +1594,9 @@ fn translate_block(
                             }
                         },
                         (
-                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
-                                offset_to_s0,
-                            })),
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                RegOrStack::Stack { offset_to_s0 },
+                            )),
                             ir::Operand::Register { rid, .. },
                         ) => match register_mp.get(rid).unwrap() {
                             DirectOrInDirect::Direct(x) => {
@@ -1618,7 +1624,7 @@ fn translate_block(
                             }
                         },
                         (
-                            Alloc::StructInRegister(v),
+                            ParamAlloc::StructInRegister(v),
                             ir::Operand::Register {
                                 rid,
                                 dtype:
@@ -2622,7 +2628,7 @@ enum RegOrStack {
 }
 
 #[derive(Debug, Clone)]
-enum Alloc {
+enum ParamAlloc {
     PrimitiveType(DirectOrInDirect<RegOrStack>),
     StructInRegister(Vec<RegisterCouple>),
 }
@@ -2641,7 +2647,7 @@ enum DirectOrInDirect<T: Clone + Copy> {
 
 #[derive(Clone)]
 struct FunctionAbi {
-    params_alloc: Vec<Alloc>,
+    params_alloc: Vec<ParamAlloc>,
     /// if on stack, offset must be zero
     ret_alloc: RetLocation,
     /// contain the ret_alloc
@@ -2650,9 +2656,9 @@ struct FunctionAbi {
 
 impl FunctionSignature {
     fn try_alloc(&self, source: &ir::TranslationUnit) -> FunctionAbi {
-        let mut params: Vec<Alloc> =
+        let mut params: Vec<ParamAlloc> =
             vec![
-                Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(Register::A0)));
+                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(Register::A0)));
                 self.params.len()
             ];
 
@@ -2670,13 +2676,14 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                            RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
-                            }));
+                            },
+                        ));
                     } else {
                         params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::Integer, next_int_reg),
                             )));
                         next_int_reg += 1;
@@ -2688,13 +2695,14 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                            RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
-                            }));
+                            },
+                        ));
                     } else {
                         params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::FloatingPoint, next_float_reg),
                             )));
                         next_float_reg += 1;
@@ -2825,19 +2833,20 @@ impl FunctionSignature {
                                 _ => unreachable!(),
                             }
                         }
-                        params[i] = Alloc::StructInRegister(x);
+                        params[i] = ParamAlloc::StructInRegister(x);
                     } else if next_int_reg > 7 {
                         while caller_alloc % 8 != 0 {
                             caller_alloc += 1;
                         }
                         caller_alloc += 8;
-                        params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                            RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
-                            }));
+                            },
+                        ));
                     } else {
                         params[i] =
-                            Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::Integer, next_int_reg),
                             )));
                         next_int_reg += 1;
@@ -2867,10 +2876,10 @@ impl FunctionSignature {
 
         for x in params.iter_mut() {
             match x {
-                Alloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
+                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                     offset_to_s0,
                 }))
-                | Alloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
+                | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                     offset_to_s0,
                 })) => {
                     *offset_to_s0 = (caller_alloc
