@@ -927,22 +927,6 @@ fn translate_block(
                             *destination,
                         ));
                     }
-                    ir::Dtype::Float { .. } => {
-                        operand2reg(lhs.clone(), Register::FT0, &mut res, register_mp, float_mp);
-                        operand2reg(rhs.clone(), Register::FT1, &mut res, register_mp, float_mp);
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::feq(dtype.clone()),
-                            rd: Register::T0,
-                            rs1: Register::FT1,
-                            rs2: Some(Register::FT0),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *destination,
-                        ));
-                    }
                     ir::Dtype::Pointer { .. } => todo!(),
                     _ => unreachable!(),
                 }
@@ -1132,26 +1116,7 @@ fn translate_block(
                         ));
                     }
                     ir::Dtype::Float { .. } => {
-                        operand2reg(lhs.clone(), Register::FT0, &mut res, register_mp, float_mp);
-                        operand2reg(rhs.clone(), Register::FT1, &mut res, register_mp, float_mp);
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: Register::T0,
-                            rs1: Register::FT0,
-                            rs2: Some(Register::FT1),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: Register::T0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(1),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *destination,
-                        ));
+                        unreachable!()
                     }
                     _ => unreachable!(),
                 }
