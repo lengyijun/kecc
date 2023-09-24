@@ -435,7 +435,7 @@ fn translate_block(
             }
             ir::Instruction::UnaryOp {
                 op: UnaryOperator::Minus,
-                operand,
+                operand: operand @ ir::Operand::Register { .. },
                 dtype: dtype @ ir::Dtype::Int { .. },
             } => {
                 operand2reg(
@@ -459,7 +459,7 @@ fn translate_block(
             }
             ir::Instruction::UnaryOp {
                 op: UnaryOperator::Minus,
-                operand,
+                operand: operand @ ir::Operand::Register { .. },
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
                 operand2reg(
@@ -483,7 +483,7 @@ fn translate_block(
             }
             ir::Instruction::UnaryOp {
                 op: UnaryOperator::Negate,
-                operand,
+                operand: operand @ ir::Operand::Register { .. },
                 dtype: ir::Dtype::Int { .. },
             } => {
                 operand2reg(
@@ -506,7 +506,7 @@ fn translate_block(
             }
             ir::Instruction::UnaryOp {
                 op: UnaryOperator::Plus,
-                operand,
+                operand: operand @ ir::Operand::Register { .. },
                 dtype: dtype @ ir::Dtype::Int { .. },
             } => {
                 operand2reg(
@@ -526,7 +526,7 @@ fn translate_block(
             }
             ir::Instruction::UnaryOp {
                 op: UnaryOperator::Plus,
-                operand,
+                operand: operand @ ir::Operand::Register { .. },
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
                 operand2reg(
