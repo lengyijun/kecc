@@ -1335,9 +1335,10 @@ fn translate_block(
                     register_mp.get(ptr_rid).unwrap(),
                 ) {
                     (DirectOrInDirect::Direct(src), DirectOrInDirect::Direct(dest)) => {
+                        res.extend(mk_itype(IType::LD, Register::T3, Register::S0, *dest));
                         cp_to_indirect_target(
                             (Register::S0, *src),
-                            (Register::S0, *dest as u64),
+                            Register::T3,
                             0,
                             dtype.clone(),
                             &mut res,
@@ -1345,9 +1346,11 @@ fn translate_block(
                         );
                     }
                     (DirectOrInDirect::InDirect(src), DirectOrInDirect::Direct(dest)) => {
+                        res.extend(mk_itype(IType::LD, Register::T2, Register::S0, *src));
+                        res.extend(mk_itype(IType::LD, Register::T3, Register::S0, *dest));
                         cp_from_indirect_to_indirect(
-                            (Register::S0, *src as u64),
-                            (Register::S0, *dest as u64),
+                            Register::T2,
+                            Register::T3,
                             0,
                             dtype.clone(),
                             &mut res,
@@ -1385,8 +1388,14 @@ fn translate_block(
                     },
             } => match register_mp.get(rid).unwrap() {
                 DirectOrInDirect::Direct(offset_to_s0) => {
+                    res.extend(mk_itype(
+                        IType::LD,
+                        Register::T2,
+                        Register::S0,
+                        *offset_to_s0,
+                    ));
                     cp_from_indirect_source(
-                        (Register::S0, *offset_to_s0 as u64),
+                        Register::T2,
                         *destination,
                         0,
                         (**inner).clone(),
@@ -1955,9 +1964,10 @@ fn translate_block(
                     ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
                     ir::Operand::Register { rid, dtype } => match register_mp.get(rid).unwrap() {
                         DirectOrInDirect::Direct(dest) => {
+                            res.extend(mk_itype(IType::LD, Register::T3, Register::S0, 0));
                             cp_to_indirect_target(
                                 (Register::S0, *dest),
-                                (Register::S0, 0),
+                                Register::T3,
                                 0,
                                 dtype.clone(),
                                 &mut res,
@@ -2131,7 +2141,7 @@ fn operand_to_stack(
 /// must not write into `source_pointer`
 /// must not modify A0
 fn cp_from_indirect_source(
-    (source_pointer, source_offset): (Register, u64), // indirect
+    src_location: Register, // the address of src
     target_base_to_s0: i64,
     offset: i64,
     dtype: ir::Dtype,
@@ -2141,15 +2151,9 @@ fn cp_from_indirect_source(
     match &dtype {
         ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
             res.extend(mk_itype(
-                asm::IType::LD,
-                Register::T0,
-                source_pointer,
-                source_offset as i64,
-            ));
-            res.extend(mk_itype(
                 asm::IType::load(dtype.clone()),
                 Register::T0,
-                Register::T0,
+                src_location,
                 offset,
             ));
             res.extend(mk_stype(
@@ -2161,15 +2165,9 @@ fn cp_from_indirect_source(
         }
         ir::Dtype::Float { .. } => {
             res.extend(mk_itype(
-                asm::IType::LD,
-                Register::T0,
-                source_pointer,
-                source_offset as i64,
-            ));
-            res.extend(mk_itype(
                 asm::IType::load(dtype.clone()),
                 Register::FT0,
-                Register::T0,
+                src_location,
                 offset,
             ));
             res.push(asm::Instruction::SType {
@@ -2183,7 +2181,7 @@ fn cp_from_indirect_source(
             let (size_of_inner_type, _) = inner.size_align_of(&source.structs).unwrap();
             for i in 0..*size {
                 cp_from_indirect_source(
-                    (source_pointer, source_offset),
+                    src_location,
                     target_base_to_s0,
                     offset + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
                     *inner.clone(),
@@ -2221,7 +2219,7 @@ fn cp_from_indirect_source(
 
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_from_indirect_source(
-                    (source_pointer, source_offset),
+                    src_location,
                     target_base_to_s0,
                     offset + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
                     dtype.into_inner(),
@@ -2236,7 +2234,7 @@ fn cp_from_indirect_source(
 
 fn cp_to_indirect_target(
     (source_reg, source_base): (Register, i64), // direct
-    (target_reg, target_base): (Register, u64), // indirect
+    dest_location: Register,
     offset: i64,
     dtype: ir::Dtype,
     res: &mut Vec<asm::Instruction>,
@@ -2251,15 +2249,9 @@ fn cp_to_indirect_target(
                 source_reg,
                 source_base + offset,
             ));
-            res.extend(mk_itype(
-                IType::LD,
-                Register::T1,
-                target_reg,
-                target_base as i64,
-            ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::T1,
+                dest_location,
                 Register::T0,
                 offset,
             ));
@@ -2271,15 +2263,9 @@ fn cp_to_indirect_target(
                 source_reg,
                 source_base + offset,
             ));
-            res.extend(mk_itype(
-                IType::LD,
-                Register::T1,
-                target_reg,
-                target_base as i64,
-            ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::T1,
+                dest_location,
                 Register::FT0,
                 offset,
             ));
@@ -2289,7 +2275,7 @@ fn cp_to_indirect_target(
             for i in 0..*size {
                 cp_to_indirect_target(
                     (source_reg, source_base),
-                    (target_reg, target_base),
+                    dest_location,
                     offset + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
                     (**inner).clone(),
                     res,
@@ -2327,7 +2313,7 @@ fn cp_to_indirect_target(
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_to_indirect_target(
                     (source_reg, source_base),
-                    (target_reg, target_base),
+                    dest_location,
                     offset + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
                     dtype.into_inner(),
                     res,
@@ -2340,8 +2326,8 @@ fn cp_to_indirect_target(
 }
 
 fn cp_from_indirect_to_indirect(
-    (source_reg, source_base): (Register, u64),
-    (target_reg, target_base): (Register, u64),
+    source_location: Register,
+    dest_location: Register,
     offset: i64,
     dtype: ir::Dtype,
     res: &mut Vec<asm::Instruction>,
@@ -2351,52 +2337,28 @@ fn cp_from_indirect_to_indirect(
     match &dtype {
         ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
             res.extend(mk_itype(
-                IType::LD,
-                Register::T0,
-                source_reg,
-                source_base as i64,
-            ));
-            res.extend(mk_itype(
                 IType::load(dtype.clone()),
                 Register::T0,
-                Register::T0,
+                source_location,
                 offset,
-            ));
-            res.extend(mk_itype(
-                IType::LD,
-                Register::T1,
-                target_reg,
-                target_base as i64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::T1,
+                dest_location,
                 Register::T0,
                 offset,
             ));
         }
         ir::Dtype::Float { .. } => {
             res.extend(mk_itype(
-                IType::LD,
-                Register::T0,
-                source_reg,
-                source_base as i64,
-            ));
-            res.extend(mk_itype(
                 IType::load(dtype.clone()),
                 Register::FT0,
-                Register::T0,
+                source_location,
                 offset,
-            ));
-            res.extend(mk_itype(
-                IType::LD,
-                Register::T1,
-                target_reg,
-                target_base as i64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
-                Register::T1,
+                dest_location,
                 Register::FT0,
                 offset,
             ));
@@ -2405,8 +2367,8 @@ fn cp_from_indirect_to_indirect(
             let (size_of_inner_type, _) = inner.size_align_of(&source.structs).unwrap();
             for i in 0..*size {
                 cp_from_indirect_to_indirect(
-                    (source_reg, source_base),
-                    (target_reg, target_base),
+                    source_location,
+                    dest_location,
                     offset + <usize as TryInto<i64>>::try_into(i * size_of_inner_type).unwrap(),
                     (**inner).clone(),
                     res,
@@ -2443,8 +2405,8 @@ fn cp_from_indirect_to_indirect(
 
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_from_indirect_to_indirect(
-                    (source_reg, source_base),
-                    (target_reg, target_base),
+                    source_location,
+                    dest_location,
                     offset + <usize as TryInto<i64>>::try_into(field_offset).unwrap(),
                     dtype.into_inner(),
                     res,
