@@ -2852,19 +2852,19 @@ fn mk_itype(instr: IType, rd: Register, rs1: Register, imm: i64) -> Vec<asm::Ins
     } else {
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
-                rd: Register::T5,
+                rd: Register::T4,
                 imm: imm as u64,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
-                rd: Register::T5,
+                rd: Register::T4,
                 rs1,
-                rs2: Some(Register::T5),
+                rs2: Some(Register::T4),
             },
             asm::Instruction::IType {
                 instr,
                 rd,
-                rs1: Register::T5,
+                rs1: Register::T4,
                 imm: Immediate::Value(0),
             },
         ]
@@ -2882,18 +2882,18 @@ fn mk_stype(instr: SType, rs1: Register, rs2: Register, imm: i64) -> Vec<asm::In
     } else {
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
-                rd: Register::T5,
+                rd: Register::T4,
                 imm: imm as u64,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
-                rd: Register::T5,
+                rd: Register::T4,
                 rs1,
-                rs2: Some(Register::T5),
+                rs2: Some(Register::T4),
             },
             asm::Instruction::SType {
                 instr,
-                rs1: Register::T5,
+                rs1: Register::T4,
                 rs2,
                 imm: Immediate::Value(0),
             },
