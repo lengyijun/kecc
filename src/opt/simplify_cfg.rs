@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::iter::empty;
+use std::iter::once;
 
 use crate::ir::*;
 use crate::opt::FunctionPass;
@@ -260,7 +262,7 @@ impl Optimize<FunctionDefinition> for SimplifyCfgEmpty {
                     for b in cases
                         .iter_mut()
                         .map(|(_, x)| x)
-                        .chain(std::iter::once(default))
+                        .chain(once(default))
                         .map(|x| merge_jump(x, &blocks_ro))
                     {
                         if b {
@@ -278,23 +280,64 @@ impl Optimize<FunctionDefinition> for SimplifyCfgEmpty {
 impl Instruction {
     pub fn walk_operand_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut Operand> + 'a> {
         match self {
-            ir::Instruction::Nop => Box::new(std::iter::empty()),
-            ir::Instruction::BinOp { lhs, rhs, .. } => {
-                Box::new(std::iter::once(lhs).chain(std::iter::once(rhs)))
-            }
-            ir::Instruction::UnaryOp { operand, .. } => Box::new(std::iter::once(operand)),
-            ir::Instruction::Store { ptr, value } => {
-                Box::new(std::iter::once(ptr).chain(std::iter::once(value)))
-            }
-            ir::Instruction::Load { ptr } => Box::new(std::iter::once(ptr)),
+            ir::Instruction::Nop => Box::new(empty()),
+            ir::Instruction::BinOp { lhs, rhs, .. } => Box::new(once(lhs).chain(once(rhs))),
+            ir::Instruction::UnaryOp { operand, .. } => Box::new(once(operand)),
+            ir::Instruction::Store { ptr, value } => Box::new(once(ptr).chain(once(value))),
+            ir::Instruction::Load { ptr } => Box::new(once(ptr)),
             ir::Instruction::Call { callee, args, .. } => {
-                Box::new(std::iter::once(callee).chain(args.iter_mut()))
+                Box::new(once(callee).chain(args.iter_mut()))
             }
-            ir::Instruction::TypeCast { value, .. } => Box::new(std::iter::once(value)),
+            ir::Instruction::TypeCast { value, .. } => Box::new(once(value)),
             ir::Instruction::GetElementPtr { ptr, offset, .. } => {
-                Box::new(std::iter::once(ptr).chain(std::iter::once(offset)))
+                Box::new(once(ptr).chain(once(offset)))
             }
         }
+    }
+
+    pub fn walk_operand<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Operand> + 'a> {
+        match self {
+            ir::Instruction::Nop => Box::new(empty()),
+            ir::Instruction::BinOp { lhs, rhs, .. } => Box::new(once(lhs).chain(once(rhs))),
+            ir::Instruction::UnaryOp { operand, .. } => Box::new(once(operand)),
+            ir::Instruction::Store { ptr, value } => Box::new(once(ptr).chain(once(value))),
+            ir::Instruction::Load { ptr } => Box::new(once(ptr)),
+            ir::Instruction::Call { callee, args, .. } => Box::new(once(callee).chain(args.iter())),
+            ir::Instruction::TypeCast { value, .. } => Box::new(once(value)),
+            ir::Instruction::GetElementPtr { ptr, offset, .. } => {
+                Box::new(once(ptr).chain(once(offset)))
+            }
+        }
+    }
+
+    pub fn walk_register<'a>(&'a self) -> Box<dyn Iterator<Item = (RegisterId, &'a Dtype)> + 'a> {
+        let f = |operand: &'a Operand| match operand {
+            Operand::Constant(_) => None,
+            Operand::Register { rid, dtype } => Some((*rid, dtype)),
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_int_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_float_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Float { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
     }
 }
 
@@ -307,7 +350,7 @@ impl BlockExit {
                 arg_then,
                 arg_else,
             } => Box::new(
-                std::iter::once(condition)
+                once(condition)
                     .chain(arg_then.args.iter_mut())
                     .chain(arg_else.args.iter_mut()),
             ),
@@ -316,12 +359,84 @@ impl BlockExit {
                 default,
                 cases,
             } => Box::new(
-                std::iter::once(value)
+                once(value)
                     .chain(default.args.iter_mut())
                     .chain(cases.iter_mut().flat_map(|(_, ja)| ja.args.iter_mut())),
             ),
-            BlockExit::Return { value } => Box::new(std::iter::once(value)),
-            BlockExit::Unreachable => Box::new(std::iter::empty()),
+            BlockExit::Return { value } => Box::new(once(value)),
+            BlockExit::Unreachable => Box::new(empty()),
+        }
+    }
+
+    pub fn walk_operand<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Operand> + 'a> {
+        match self {
+            BlockExit::Jump { arg } => Box::new(arg.args.iter()),
+            BlockExit::ConditionalJump {
+                condition,
+                arg_then,
+                arg_else,
+            } => Box::new(
+                once(condition)
+                    .chain(arg_then.args.iter())
+                    .chain(arg_else.args.iter()),
+            ),
+            BlockExit::Switch {
+                value,
+                default,
+                cases,
+            } => Box::new(
+                once(value)
+                    .chain(default.args.iter())
+                    .chain(cases.iter().flat_map(|(_, ja)| ja.args.iter())),
+            ),
+            BlockExit::Return { value } => Box::new(once(value)),
+            BlockExit::Unreachable => Box::new(empty()),
+        }
+    }
+
+    pub fn walk_register<'a>(&'a self) -> Box<dyn Iterator<Item = (RegisterId, &'a Dtype)> + 'a> {
+        let f = |operand: &'a Operand| match operand {
+            Operand::Constant(_) => None,
+            Operand::Register { rid, dtype } => Some((*rid, dtype)),
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_int_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_float_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Float { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_jump_bid(&self) -> Box<dyn Iterator<Item = BlockId> + '_> {
+        match self {
+            BlockExit::Jump { arg } => Box::new(once(arg.bid)),
+            BlockExit::ConditionalJump {
+                arg_then, arg_else, ..
+            } => Box::new(once(arg_then.bid).chain(once(arg_else.bid))),
+            BlockExit::Switch { default, cases, .. } => Box::new(
+                cases
+                    .iter()
+                    .map(|(_, jump_arg)| jump_arg.bid)
+                    .chain(once(default.bid)),
+            ),
+            BlockExit::Return { .. } | BlockExit::Unreachable => Box::new(empty()),
         }
     }
 }
