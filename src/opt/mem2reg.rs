@@ -380,6 +380,7 @@ fn mark_impromotable(lhs: &Operand, impromotable: &mut HashSet<usize>) {
 
 // https://en.wikipedia.org/wiki/Dominator_(graph_theory)
 // A -> [A, B, C] means B dominate A, C dominate A
+// if a block is unreachable(not block_init, and no pred): not contained in return value
 pub fn calculate_dominator(
     code: &FunctionDefinition,
     pred: &HashMap<BlockId, HashSet<BlockId>>,
@@ -388,35 +389,35 @@ pub fn calculate_dominator(
     let N: HashSet<BlockId> = code.blocks.iter().map(|(&bid, _)| bid).collect();
 
     // TODO: in another order
-    let iter = code
-        .blocks
-        .iter()
-        .map(|(&bid, _)| bid)
-        .filter(|bid| bid != &code.bid_init);
+    let iter = code.blocks.iter().filter_map(|(bid, _)| {
+        if bid != &code.bid_init {
+            pred.get(bid).map(|pred| (bid, pred))
+        } else {
+            None
+        }
+    });
 
     let mut res: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
     let None = res.insert(code.bid_init, HashSet::from([code.bid_init])) else {unreachable!()};
-    for bid in iter.clone() {
-        let None = res.insert(bid, N.clone()) else {unreachable!()};
+    for (bid, _) in iter.clone() {
+        let None = res.insert(*bid, N.clone()) else {unreachable!()};
     }
 
     let mut changed = true;
     while changed {
         changed = false;
-        for bid in iter.clone() {
+        for (bid, pred) in iter.clone() {
             let x: HashSet<BlockId> = pred
-                .get(&bid)
-                .unwrap()
                 .iter()
                 .map(|x| res.get(x).unwrap())
                 .fold(N.clone(), |a, b| a.intersection(b).cloned().collect())
-                .union(&HashSet::from([bid]))
+                .union(&HashSet::from([*bid]))
                 .cloned()
                 .collect();
 
-            if &x != res.get(&bid).unwrap() {
+            if &x != res.get(bid).unwrap() {
                 changed = true;
-                let Some(_) = res.insert(bid, x) else { unreachable!() } ;
+                let Some(_) = res.insert(*bid, x) else { unreachable!() } ;
             }
         }
     }
