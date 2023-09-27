@@ -469,6 +469,28 @@ impl FunctionDefinition {
         let None = hm.insert(self.bid_init, HashSet::new()) else {unreachable!()};
         hm
     }
+
+    pub fn dom_tree(&self) -> HashMap<BlockId, Vec<BlockId>> {
+        let rpo = self.reverse_post_order();
+        let pred = self.calculate_pred();
+        let dom = calculate_dominator(self, &pred);
+        let idom = calculate_idom(self, &dom, rpo);
+
+        let mut res: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+
+        for (child, parent) in idom.into_iter() {
+            match res.entry(parent) {
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    o.get_mut().push(child);
+                }
+                std::collections::hash_map::Entry::Vacant(x) => {
+                    let _ = x.insert(vec![child]);
+                }
+            }
+        }
+
+        res
+    }
 }
 
 fn dfs_walker(
