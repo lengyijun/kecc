@@ -409,7 +409,7 @@ pub fn calculate_dominator(
         for (bid, pred) in iter.clone() {
             let x: HashSet<BlockId> = pred
                 .iter()
-                .map(|x| res.get(x).unwrap())
+                .filter_map(|x| res.get(x))
                 .fold(N.clone(), |a, b| a.intersection(b).cloned().collect())
                 .union(&HashSet::from([*bid]))
                 .cloned()
