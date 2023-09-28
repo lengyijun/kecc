@@ -720,6 +720,18 @@ fn mk_interference_graph(
             for rid_1 in instr.walk_float_register().filter_map(f) {
                 let _ = live_set.float_live_set.insert(rid_1);
             }
+
+            match instr.dtype() {
+                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
+                    let _ = live_set.int_live_set.remove(&RegisterId::Temp { bid, iid });
+                }
+                ir::Dtype::Float { .. } => {
+                    let _ = live_set
+                        .float_live_set
+                        .remove(&RegisterId::Temp { bid, iid });
+                }
+                _ => {}
+            }
             for rid_1 in instr.walk_int_register().filter_map(f) {
                 for a in &live_set.int_live_set {
                     if rid_1 != *a {
@@ -736,12 +748,6 @@ fn mk_interference_graph(
             }
 
             // TODO: check Call T5 T6 ...
-
-            // TODO: remove ealier ?
-            let _ = live_set.int_live_set.remove(&RegisterId::Temp { bid, iid });
-            let _ = live_set
-                .float_live_set
-                .remove(&RegisterId::Temp { bid, iid });
         }
 
         for (aid_1, dtype_1) in block.phinodes.iter().enumerate() {
