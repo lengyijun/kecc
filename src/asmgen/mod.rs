@@ -1019,23 +1019,25 @@ fn translate_block(
                     Value::try_from(c.clone()).unwrap(),
                 )
                 .unwrap();
+                let data_size = DataSize::try_from(dtype.clone()).unwrap();
                 match v {
                     Value::Int { value, .. } => {
                         match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                             DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
                                 res.extend(mk_itype(
-                                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                                    IType::Addi(data_size),
                                     *dest_reg,
                                     Register::Zero,
-                                    value as u64,
+                                    value as u64 & data_size.mask(),
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                                let data_size = DataSize::try_from(dtype.clone()).unwrap();
                                 res.extend(mk_itype(
-                                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                                    IType::Addi(data_size),
                                     Register::T0,
                                     Register::Zero,
-                                    value as u64,
+                                    value as u64 & data_size.mask(),
                                 ));
                                 res.extend(mk_stype(
                                     SType::store(dtype.clone()),
@@ -1287,11 +1289,12 @@ fn translate_block(
                         Value::Int { value, .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
+                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            IType::Addi(data_size),
                             *dest_reg,
                             Register::Zero,
-                            value as u64,
+                            value as u64 & data_size.mask(),
                         ));
                     }
                     (
@@ -1314,11 +1317,12 @@ fn translate_block(
                         Value::Int { value, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
+                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            IType::Addi(data_size),
                             Register::T0,
                             Register::Zero,
-                            value as u64,
+                            value as u64 & data_size.mask(),
                         ));
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
@@ -1404,19 +1408,21 @@ fn translate_block(
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                     DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
+                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            IType::Addi(data_size),
                             *dest_reg,
                             reg,
-                            *value as u64,
+                            *value as u64 & data_size.mask(),
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            IType::Addi(data_size),
                             Register::T0,
                             reg,
-                            *value as u64,
+                            *value as u64 & data_size.mask(),
                         ));
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
@@ -1814,11 +1820,12 @@ fn translate_block(
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                     DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
+                        let data_size = DataSize::try_from(x.dtype()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(x.dtype()).unwrap()),
+                            IType::Addi(data_size),
                             *dest_reg,
                             reg1,
-                            value as u64,
+                            value as u64 & data_size.mask(),
                         ));
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
                             rd: *dest_reg,
@@ -1826,11 +1833,12 @@ fn translate_block(
                         }));
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                        let data_size = DataSize::try_from(x.dtype()).unwrap();
                         res.extend(mk_itype(
-                            IType::Addi(DataSize::try_from(x.dtype()).unwrap()),
+                            IType::Addi(data_size),
                             Register::T0,
                             reg1,
-                            value as u64,
+                            value as u64 & data_size.mask(),
                         ));
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
                             rd: Register::T0,
@@ -3727,11 +3735,12 @@ fn translate_block(
                 load_operand_to_reg(value.clone(), Register::T0, &mut res, register_mp, float_mp);
             for (c, jump_arg) in cases {
                 let ir::Constant::Int { value, .. } = c else {unreachable!()};
+                let data_size = DataSize::try_from(dtype.clone()).unwrap();
                 res.extend(mk_itype(
-                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                    IType::Addi(data_size),
                     Register::T1,
                     Register::Zero,
-                    *value as u64,
+                    *value as u64 & data_size.mask(),
                 ));
                 let then_label = gen_jump_arg_or_new_block(
                     func_name,
@@ -3905,11 +3914,12 @@ fn load_operand_to_reg(
 ) -> Register {
     match operand {
         ir::Operand::Constant(ir::Constant::Int { value, .. }) => {
+            let data_size = DataSize::try_from(operand.dtype()).unwrap();
             res.extend(mk_itype(
-                IType::Addi(DataSize::try_from(operand.dtype()).unwrap()),
+                IType::Addi(data_size),
                 or_register,
                 Register::Zero,
-                value as u64,
+                value as u64 & data_size.mask(),
             ));
             or_register
         }
@@ -5082,4 +5092,17 @@ fn gen_kill(
     }
 
     liveness_res
+}
+
+impl DataSize {
+    fn mask(self) -> u64 {
+        match self {
+            DataSize::Byte => 0xff,
+            DataSize::Half => 0xffff,
+            DataSize::Word => 0xffffffff,
+            DataSize::Double => 0xffffffffffffffff,
+            DataSize::SinglePrecision => unreachable!(),
+            DataSize::DoublePrecision => unreachable!(),
+        }
+    }
 }
