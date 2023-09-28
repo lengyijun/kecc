@@ -3438,7 +3438,12 @@ fn translate_block(
             }
             ir::Instruction::TypeCast {
                 value,
-                target_dtype: to @ ir::Dtype::Int { .. },
+                target_dtype:
+                    to @ ir::Dtype::Int {
+                        width: width_target,
+                        is_signed: is_signed_target,
+                        ..
+                    },
             } => {
                 let from = value.dtype();
 
@@ -3447,7 +3452,29 @@ fn translate_block(
                     register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
                 ) {
                     (
-                        ir::Dtype::Int { .. },
+                        ir::Dtype::Int {
+                            width: 1,
+                            is_signed: true,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
+                    ) => match (width_target, is_signed_target) {
+                        (8, true) => unimplemented!(),
+                        (8, false) => unimplemented!(),
+                        (16, true) => unimplemented!(),
+                        (16, false) => unimplemented!(),
+                        (32, true) => unimplemented!(),
+                        (32, false) => unimplemented!(),
+                        (64, true) => unimplemented!(),
+                        (64, false) => unimplemented!(),
+                        _ => unreachable!(),
+                    },
+                    (
+                        ir::Dtype::Int {
+                            width: 1,
+                            is_signed: false,
+                            ..
+                        },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
                         let reg = load_operand_to_reg(
@@ -3461,6 +3488,278 @@ fn translate_block(
                             rd: *dest_reg,
                             rs: reg,
                         }));
+                    }
+                    (
+                        ir::Dtype::Int {
+                            width: 8,
+                            is_signed: true,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
+                    ) => {
+                        let reg = load_operand_to_reg(
+                            value.clone(),
+                            Register::T0,
+                            &mut res,
+                            register_mp,
+                            float_mp,
+                        );
+                        match (width_target, is_signed_target) {
+                            (8, true) => unreachable!(),
+                            (8, false) => {
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Andi,
+                                    rd: *dest_reg,
+                                    rs1: reg,
+                                    imm: Immediate::Value(255),
+                                });
+                            }
+                            (16, true) => unimplemented!(),
+                            (16, false) => unimplemented!(),
+                            (32, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (32, false) => unimplemented!(),
+                            (64, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (64, false) => unimplemented!(),
+                            _ => unreachable!(),
+                        }
+                    }
+                    (
+                        ir::Dtype::Int {
+                            width: 8,
+                            is_signed: false,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
+                    ) => {
+                        let reg = load_operand_to_reg(
+                            value.clone(),
+                            Register::T0,
+                            &mut res,
+                            register_mp,
+                            float_mp,
+                        );
+                        match (width_target, is_signed_target) {
+                            (8, true) => unimplemented!(),
+                            (8, false) => unimplemented!(),
+                            (16, true) => unimplemented!(),
+                            (16, false) => unimplemented!(),
+                            (32, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (32, false) => unimplemented!(),
+                            (64, true) => unimplemented!(),
+                            (64, false) => unimplemented!(),
+                            _ => unreachable!(),
+                        }
+                    }
+                    (
+                        ir::Dtype::Int {
+                            width: 16,
+                            is_signed: true,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
+                    ) => match (width_target, is_signed_target) {
+                        (8, true) => unimplemented!(),
+                        (8, false) => unimplemented!(),
+                        (16, true) => unimplemented!(),
+                        (16, false) => unimplemented!(),
+                        (32, true) => unimplemented!(),
+                        (32, false) => unimplemented!(),
+                        (64, true) => unimplemented!(),
+                        (64, false) => unimplemented!(),
+                        _ => unreachable!(),
+                    },
+                    (
+                        ir::Dtype::Int {
+                            width: 16,
+                            is_signed: false,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
+                    ) => match (width_target, is_signed_target) {
+                        (8, true) => unimplemented!(),
+                        (8, false) => unimplemented!(),
+                        (16, true) => unimplemented!(),
+                        (16, false) => unimplemented!(),
+                        (32, true) => unimplemented!(),
+                        (32, false) => unimplemented!(),
+                        (64, true) => unimplemented!(),
+                        (64, false) => unimplemented!(),
+                        _ => unreachable!(),
+                    },
+                    (
+                        ir::Dtype::Int {
+                            width: 32,
+                            is_signed: true,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
+                    ) => {
+                        let reg = load_operand_to_reg(
+                            value.clone(),
+                            Register::T0,
+                            &mut res,
+                            register_mp,
+                            float_mp,
+                        );
+                        match (width_target, is_signed_target) {
+                            (8, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Slli(DataSize::Double),
+                                    rd: *dest_reg,
+                                    rs1: *dest_reg,
+                                    imm: Immediate::Value(56),
+                                });
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Srai(DataSize::Double),
+                                    rd: *dest_reg,
+                                    rs1: *dest_reg,
+                                    imm: Immediate::Value(56),
+                                });
+                            }
+                            (8, false) => {
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Andi,
+                                    rd: *dest_reg,
+                                    rs1: reg,
+                                    imm: Immediate::Value(255),
+                                });
+                            }
+                            (16, true) => unimplemented!(),
+                            (16, false) => unimplemented!(),
+                            (32, true) => unimplemented!(),
+                            (32, false) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (64, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (64, false) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    (
+                        ir::Dtype::Int {
+                            width: 32,
+                            is_signed: false,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
+                    ) => match (width_target, is_signed_target) {
+                        (8, true) => unimplemented!(),
+                        (8, false) => unimplemented!(),
+                        (16, true) => unimplemented!(),
+                        (16, false) => unimplemented!(),
+                        (32, true) => unimplemented!(),
+                        (32, false) => unimplemented!(),
+                        (64, true) => unimplemented!(),
+                        (64, false) => unimplemented!(),
+                        _ => unreachable!(),
+                    },
+                    (
+                        ir::Dtype::Int {
+                            width: 64,
+                            is_signed: true,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
+                    ) => {
+                        let reg = load_operand_to_reg(
+                            value.clone(),
+                            Register::T0,
+                            &mut res,
+                            register_mp,
+                            float_mp,
+                        );
+                        match (width_target, is_signed_target) {
+                            (8, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Slli(DataSize::Double),
+                                    rd: *dest_reg,
+                                    rs1: *dest_reg,
+                                    imm: Immediate::Value(56),
+                                });
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::Srai(DataSize::Double),
+                                    rd: *dest_reg,
+                                    rs1: *dest_reg,
+                                    imm: Immediate::Value(56),
+                                });
+                            }
+                            (8, false) => unimplemented!(),
+                            (16, true) => unimplemented!(),
+                            (16, false) => unimplemented!(),
+                            (32, true) => unimplemented!(),
+                            (32, false) => unimplemented!(),
+                            (64, true) => unimplemented!(),
+                            (64, false) => unimplemented!(),
+                            _ => unreachable!(),
+                        }
+                    }
+                    (
+                        ir::Dtype::Int {
+                            width: 64,
+                            is_signed: false,
+                            ..
+                        },
+                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
+                    ) => {
+                        let reg = load_operand_to_reg(
+                            value.clone(),
+                            Register::T0,
+                            &mut res,
+                            register_mp,
+                            float_mp,
+                        );
+                        match (width_target, is_signed_target) {
+                            (8, true) => unimplemented!(),
+                            (8, false) => unimplemented!(),
+                            (16, true) => unimplemented!(),
+                            (16, false) => unimplemented!(),
+                            (32, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::SextW {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
+                            (32, false) => unimplemented!(),
+                            (64, true) => unimplemented!(),
+                            (64, false) => unimplemented!(),
+                            _ => unreachable!(),
+                        }
                     }
                     (
                         ir::Dtype::Int { .. },
@@ -3522,7 +3821,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    _ => unreachable!(),
+                    _ => unreachable!("{from}"),
                 }
             }
             ir::Instruction::TypeCast {
