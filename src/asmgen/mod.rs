@@ -501,9 +501,11 @@ fn alloc_register(
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     stack_offset_2_s0: &mut i64,
 ) {
-    let (mut int_ig, mut float_ig): (GraphWrapper, GraphWrapper) =
-        mk_interference_graph(definition, register_mp);
+    let mut int_ig = int_interference_graph(definition, register_mp);
     spills(&mut int_ig, &INT_REGISTERS, stack_offset_2_s0, register_mp);
+    color(int_ig, &INT_REGISTERS, register_mp);
+
+    let mut float_ig = float_interference_graph(definition, register_mp);
     spills(
         &mut float_ig,
         &FLOAT_REGISTERS,
@@ -511,7 +513,6 @@ fn alloc_register(
         register_mp,
     );
 
-    color(int_ig, &INT_REGISTERS, register_mp);
     color(float_ig, &FLOAT_REGISTERS, register_mp);
 }
 
@@ -565,29 +566,6 @@ fn color(
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct LiveSet {
-    int_live_set: HashSet<RegisterId>,
-    float_live_set: HashSet<RegisterId>,
-}
-
-impl LiveSet {
-    fn union(self, other: &Self) -> Self {
-        Self {
-            int_live_set: self
-                .int_live_set
-                .union(&other.int_live_set)
-                .cloned()
-                .collect(),
-            float_live_set: self
-                .float_live_set
-                .union(&other.float_live_set)
-                .cloned()
-                .collect(),
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 struct GraphWrapper {
     graph: StableGraph<Option<Register>, (), petgraph::Undirected>,
@@ -614,6 +592,9 @@ impl GraphWrapper {
         b: RegisterId,
         register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     ) {
+        if a == b {
+            return;
+        }
         if matches!(a, RegisterId::Local { .. }) || matches!(b, RegisterId::Local { .. }) {
             return;
         }
@@ -637,10 +618,84 @@ impl GraphWrapper {
     }
 }
 
-fn mk_interference_graph(
+fn int_inter_block_liveness_graph(
+    definition: &ir::FunctionDefinition,
+    _register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+) -> LivenessRes {
+    // def can be aggressive
+    let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
+    for (&bid, block) in &definition.blocks {
+        let mut v = Vec::new();
+        for aid in 0..block.phinodes.len() {
+            v.push(RegisterId::Arg { bid, aid });
+        }
+        for iid in 0..block.instructions.len() {
+            v.push(RegisterId::Temp { bid, iid });
+        }
+        let None = def.insert(bid, v) else {unreachable!()};
+    }
+
+    let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
+    for (&curr_bid, block) in &definition.blocks {
+        let v: Vec<RegisterId> = block
+            .walk_int_register()
+            .filter_map(|rid| match &rid {
+                RegisterId::Local { .. } => None,
+                RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } => {
+                    if *bid == curr_bid {
+                        None
+                    } else {
+                        Some(rid)
+                    }
+                }
+            })
+            .collect();
+        let None = usee.insert(curr_bid, v) else {unreachable!()};
+    }
+    gen_kill(&def, &usee, definition)
+}
+
+fn float_inter_block_liveness_graph(
+    definition: &ir::FunctionDefinition,
+    _register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+) -> LivenessRes {
+    // def can be aggressive
+    let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
+    for (&bid, block) in &definition.blocks {
+        let mut v = Vec::new();
+        for aid in 0..block.phinodes.len() {
+            v.push(RegisterId::Arg { bid, aid });
+        }
+        for iid in 0..block.instructions.len() {
+            v.push(RegisterId::Temp { bid, iid });
+        }
+        let None = def.insert(bid, v) else {unreachable!()};
+    }
+
+    let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
+    for (&curr_bid, block) in &definition.blocks {
+        let v: Vec<RegisterId> = block
+            .walk_float_register()
+            .filter_map(|rid| match &rid {
+                RegisterId::Local { .. } => None,
+                RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } => {
+                    if *bid == curr_bid {
+                        None
+                    } else {
+                        Some(rid)
+                    }
+                }
+            })
+            .collect();
+        let None = usee.insert(curr_bid, v) else {unreachable!()};
+    }
+    gen_kill(&def, &usee, definition)
+}
+
+fn int_interference_graph(
     definition: &ir::FunctionDefinition,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) -> (GraphWrapper, GraphWrapper) {
+) -> GraphWrapper {
     let f = |register_id: RegisterId| {
         // TODO: maybe unnecessary
         if matches!(register_id, RegisterId::Local { .. })
@@ -657,14 +712,110 @@ fn mk_interference_graph(
     };
 
     let mut int_ig: GraphWrapper = GraphWrapper::default();
-    let mut float_ig: GraphWrapper = GraphWrapper::default();
-
     for (rid, v) in register_mp {
         match v {
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
             | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
                 let _ = int_ig.add_node(*rid);
             }
+            _ => {}
+        }
+    }
+
+    let liveness_sets = int_inter_block_liveness_graph(definition, register_mp).out;
+
+    for (bid, mut live_set) in liveness_sets {
+        let block = definition.blocks.get(&bid).unwrap();
+
+        // first analyze block.exit
+        for rid in block.exit.walk_int_register().filter_map(f) {
+            let _ = live_set.insert(rid);
+        }
+        for rid in block.exit.walk_int_register().filter_map(f) {
+            for a in &live_set {
+                int_ig.add_edge(*a, rid, register_mp);
+            }
+        }
+
+        // then visit instruction in reverse order
+        for (iid, instr) in block.instructions.iter().enumerate().rev() {
+            let _ = live_set.remove(&RegisterId::Temp { bid, iid });
+
+            match instr.dtype() {
+                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
+                    for &a in &live_set {
+                        int_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
+                    }
+                }
+                _ => {}
+            }
+
+            for rid_1 in instr.walk_int_register().filter_map(f) {
+                let _ = live_set.insert(rid_1);
+            }
+
+            for rid_1 in instr.walk_int_register().filter_map(f) {
+                for &a in &live_set {
+                    int_ig.add_edge(a, rid_1, register_mp);
+                }
+            }
+
+            // TODO: check Call T5 T6 ...
+        }
+
+        // TODO: not a good idea to define closure in loop
+        let f = |(aid, dtype): (usize, &ir::Dtype)| match dtype {
+            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => Some(aid),
+            _ => None,
+        };
+
+        for aid in block
+            .phinodes
+            .iter()
+            .enumerate()
+            .filter_map(|(aid, dtype)| f((aid, &**dtype)))
+        {
+            let _ = live_set.insert(RegisterId::Arg { bid, aid });
+        }
+
+        for aid in block
+            .phinodes
+            .iter()
+            .enumerate()
+            .filter_map(|(aid, dtype)| f((aid, &**dtype)))
+        {
+            let arg = RegisterId::Arg { bid, aid };
+            for &rid in &live_set {
+                int_ig.add_edge(rid, arg, register_mp);
+            }
+        }
+    }
+
+    int_ig
+}
+
+fn float_interference_graph(
+    definition: &ir::FunctionDefinition,
+    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+) -> GraphWrapper {
+    let f = |register_id: RegisterId| {
+        // TODO: maybe unnecessary
+        if matches!(register_id, RegisterId::Local { .. })
+            || matches!(
+                register_mp.get(&register_id).unwrap(),
+                DirectOrInDirect::Direct(RegOrStack::Stack { .. })
+                    | DirectOrInDirect::InDirect(RegOrStack::Stack { .. })
+            )
+        {
+            None
+        } else {
+            Some(register_id)
+        }
+    };
+
+    let mut float_ig: GraphWrapper = GraphWrapper::default();
+    for (rid, v) in register_mp {
+        match v {
             DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
             | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
                 let _ = float_ig.add_node(*rid);
@@ -673,129 +824,76 @@ fn mk_interference_graph(
         }
     }
 
-    let dom_tree = definition.dom_tree();
+    let liveness_sets = float_inter_block_liveness_graph(definition, register_mp).out;
 
-    // recode the live set at the beginning of block
-    let mut live_sets: HashMap<BlockId, LiveSet> = HashMap::new();
-
-    for bid in post_order(&dom_tree, definition.bid_init) {
+    for (bid, mut live_set) in liveness_sets {
         let block = definition.blocks.get(&bid).unwrap();
 
-        let mut live_set: LiveSet = dom_tree
-            .get(&bid)
-            .map(|children| {
-                children.iter().fold(LiveSet::default(), |live_set, child| {
-                    live_set.union(live_sets.get(child).unwrap())
-                })
-            })
-            .unwrap_or_default();
-
         // first analyze block.exit
-        for rid in block.exit.walk_int_register().filter_map(f) {
-            let _ = live_set.int_live_set.insert(rid);
+        for rid in block.exit.walk_float_register().filter_map(f) {
+            let _ = live_set.insert(rid);
         }
         for rid in block.exit.walk_float_register().filter_map(f) {
-            let _ = live_set.float_live_set.insert(rid);
-        }
-        for rid in block.exit.walk_int_register().filter_map(f) {
-            for a in &live_set.int_live_set {
-                if rid != *a {
-                    int_ig.add_edge(*a, rid, register_mp);
-                }
-            }
-        }
-        for rid in block.exit.walk_float_register().filter_map(f) {
-            for a in &live_set.float_live_set {
-                if rid != *a {
-                    float_ig.add_edge(*a, rid, register_mp);
-                }
+            for a in &live_set {
+                float_ig.add_edge(*a, rid, register_mp);
             }
         }
 
         // then visit instruction in reverse order
         for (iid, instr) in block.instructions.iter().enumerate().rev() {
-            for rid_1 in instr.walk_int_register().filter_map(f) {
-                let _ = live_set.int_live_set.insert(rid_1);
-            }
-            for rid_1 in instr.walk_float_register().filter_map(f) {
-                let _ = live_set.float_live_set.insert(rid_1);
-            }
+            let _ = live_set.remove(&RegisterId::Temp { bid, iid });
 
             match instr.dtype() {
-                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                    let _ = live_set.int_live_set.remove(&RegisterId::Temp { bid, iid });
-                }
                 ir::Dtype::Float { .. } => {
-                    let _ = live_set
-                        .float_live_set
-                        .remove(&RegisterId::Temp { bid, iid });
+                    for &a in &live_set {
+                        float_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
+                    }
                 }
                 _ => {}
             }
-            for rid_1 in instr.walk_int_register().filter_map(f) {
-                for a in &live_set.int_live_set {
-                    if rid_1 != *a {
-                        int_ig.add_edge(*a, rid_1, register_mp);
-                    }
-                }
-            }
+
             for rid_1 in instr.walk_float_register().filter_map(f) {
-                for a in &live_set.float_live_set {
-                    if rid_1 != *a {
-                        float_ig.add_edge(*a, rid_1, register_mp);
-                    }
+                let _ = live_set.insert(rid_1);
+            }
+
+            for rid_1 in instr.walk_float_register().filter_map(f) {
+                for &a in &live_set {
+                    float_ig.add_edge(a, rid_1, register_mp);
                 }
             }
 
             // TODO: check Call T5 T6 ...
         }
 
-        for (aid_1, dtype_1) in block.phinodes.iter().enumerate() {
-            for (aid_2, dtype_2) in block.phinodes.iter().enumerate() {
-                match (&**dtype_1, &**dtype_2) {
-                    (
-                        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
-                        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
-                    ) => {
-                        int_ig.add_edge(
-                            RegisterId::Arg { bid, aid: aid_1 },
-                            RegisterId::Arg { bid, aid: aid_2 },
-                            register_mp,
-                        );
-                    }
-                    (ir::Dtype::Float { .. }, ir::Dtype::Float { .. }) => {
-                        float_ig.add_edge(
-                            RegisterId::Arg { bid, aid: aid_1 },
-                            RegisterId::Arg { bid, aid: aid_2 },
-                            register_mp,
-                        );
-                    }
-                    _ => {}
-                }
-            }
+        // TODO: not a good idea to define closure in loop
+        let f = |(aid, dtype): (usize, &ir::Dtype)| match dtype {
+            ir::Dtype::Float { .. } => Some(aid),
+            _ => None,
+        };
+
+        for aid in block
+            .phinodes
+            .iter()
+            .enumerate()
+            .filter_map(|(aid, dtype)| f((aid, &**dtype)))
+        {
+            let _ = live_set.insert(RegisterId::Arg { bid, aid });
         }
 
-        // remove phinode from live_set
-        for (aid, dtype) in block.phinodes.iter().enumerate() {
-            match &**dtype {
-                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                    // phinode maybe unused
-                    let _ = live_set.int_live_set.remove(&RegisterId::Arg { bid, aid });
-                }
-                ir::Dtype::Float { .. } => {
-                    // phinode maybe unused
-                    let _ = live_set
-                        .float_live_set
-                        .remove(&RegisterId::Arg { bid, aid });
-                }
-                _ => unreachable!(),
+        for aid in block
+            .phinodes
+            .iter()
+            .enumerate()
+            .filter_map(|(aid, dtype)| f((aid, &**dtype)))
+        {
+            let arg = RegisterId::Arg { bid, aid };
+            for &rid in &live_set {
+                float_ig.add_edge(rid, arg, register_mp);
             }
         }
-
-        let None = live_sets.insert(bid, live_set) else {unreachable!()};
     }
 
-    (int_ig, float_ig)
+    float_ig
 }
 
 fn spills(
@@ -4885,7 +4983,6 @@ fn pre_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> Ve
 
     res
 }
- */
 
 fn post_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> Vec<BlockId> {
     let mut res = vec![];
@@ -4898,4 +4995,69 @@ fn post_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> V
 
     res.push(bid_init);
     res
+}
+ */
+
+#[derive(Debug, Default)]
+struct LivenessRes {
+    inn: HashMap<BlockId, HashSet<RegisterId>>,
+    out: HashMap<BlockId, HashSet<RegisterId>>,
+}
+
+// https://groups.seas.harvard.edu/courses/cs153/2019fa/lectures/Lec20-Dataflow-analysis.pdf
+fn gen_kill(
+    def: &HashMap<BlockId, Vec<RegisterId>>,
+    usee: &HashMap<BlockId, Vec<RegisterId>>,
+    definition: &ir::FunctionDefinition,
+) -> LivenessRes {
+    let mut liveness_res = LivenessRes::default();
+
+    let mut modified = true;
+    while modified {
+        modified = false;
+        for (bid, block) in &definition.blocks {
+            let old_out_len = liveness_res
+                .out
+                .get(bid)
+                .map(|x| x.len())
+                .unwrap_or_default();
+            let old_in_len = liveness_res
+                .inn
+                .get(bid)
+                .map(|x| x.len())
+                .unwrap_or_default();
+
+            let new_out: HashSet<RegisterId> = block.exit.walk_jump_bid().fold(
+                HashSet::new(),
+                |value, jump_bid| match liveness_res.inn.get(&jump_bid) {
+                    Some(x) => value.union(x).copied().collect(),
+                    None => value,
+                },
+            );
+
+            match new_out.len().cmp(&old_out_len) {
+                std::cmp::Ordering::Less => unreachable!(),
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Greater => modified = true,
+            }
+
+            let new_in: HashSet<RegisterId> = new_out
+                .iter()
+                .filter(|&rid| !def.get(bid).unwrap().contains(rid))
+                .chain(usee.get(bid).unwrap())
+                .copied()
+                .collect();
+
+            match new_in.len().cmp(&old_in_len) {
+                std::cmp::Ordering::Less => unreachable!(),
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Greater => modified = true,
+            }
+
+            let _x = liveness_res.inn.insert(*bid, new_in);
+            let _x = liveness_res.out.insert(*bid, new_out);
+        }
+    }
+
+    liveness_res
 }
