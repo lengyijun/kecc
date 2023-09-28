@@ -450,6 +450,15 @@ impl Block {
                 .chain(self.exit.walk_operand_mut()),
         )
     }
+
+    pub fn walk_operand<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Operand> + 'a> {
+        Box::new(
+            self.instructions
+                .iter()
+                .flat_map(|x| x.walk_operand())
+                .chain(self.exit.walk_operand()),
+        )
+    }
 }
 
 // return true: modified
