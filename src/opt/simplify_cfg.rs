@@ -459,6 +459,36 @@ impl Block {
                 .chain(self.exit.walk_operand()),
         )
     }
+
+    pub fn walk_register<'a>(&'a self) -> Box<dyn Iterator<Item = (RegisterId, &'a Dtype)> + 'a> {
+        let f = |operand: &'a Operand| match operand {
+            Operand::Constant(_) => None,
+            Operand::Register { rid, dtype } => Some((*rid, dtype)),
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_int_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
+
+    pub fn walk_float_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
+        let f = |operand: &Operand| match operand {
+            Operand::Register {
+                rid,
+                dtype: ir::Dtype::Float { .. },
+            } => Some(*rid),
+            _ => None,
+        };
+        Box::new(self.walk_operand().filter_map(f))
+    }
 }
 
 // return true: modified
