@@ -1016,16 +1016,20 @@ fn translate_block(
                     Value::Int { value, .. } => {
                         match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                             DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                                    rd: *dest_reg,
-                                    imm: value as u64,
-                                }));
+                                res.extend(mk_itype(
+                                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                                    *dest_reg,
+                                    Register::Zero,
+                                    value as u64 as i64,
+                                ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                                    rd: Register::T0,
-                                    imm: value as u64,
-                                }));
+                                res.extend(mk_itype(
+                                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                                    Register::T0,
+                                    Register::Zero,
+                                    value as u64 as i64,
+                                ));
                                 res.extend(mk_stype(
                                     SType::store(dtype.clone()),
                                     Register::S0,
@@ -1276,10 +1280,12 @@ fn translate_block(
                         Value::Int { value, .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                            rd: *dest_reg,
-                            imm: value as u64,
-                        }));
+                        res.extend(mk_itype(
+                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            *dest_reg,
+                            Register::Zero,
+                            value as u64 as i64,
+                        ));
                     }
                     (
                         Value::Float { value, width },
@@ -1301,10 +1307,12 @@ fn translate_block(
                         Value::Int { value, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                            rd: Register::T0,
-                            imm: value as u64,
-                        }));
+                        res.extend(mk_itype(
+                            IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                            Register::T0,
+                            Register::Zero,
+                            value as u64 as i64,
+                        ));
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
                             Register::S0,
@@ -3705,14 +3713,17 @@ fn translate_block(
             default,
             cases,
         } => {
+            let dtype = value.dtype();
             let rs1 =
                 load_operand_to_reg(value.clone(), Register::T0, &mut res, register_mp, float_mp);
             for (c, jump_arg) in cases {
                 let ir::Constant::Int { value, .. } = c else {unreachable!()};
-                res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                    rd: Register::T1,
-                    imm: *value as u64,
-                }));
+                res.extend(mk_itype(
+                    IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
+                    Register::T1,
+                    Register::Zero,
+                    *value as u64 as i64,
+                ));
                 let then_label = gen_jump_arg_or_new_block(
                     func_name,
                     bid,
@@ -3885,10 +3896,12 @@ fn load_operand_to_reg(
 ) -> Register {
     match operand {
         ir::Operand::Constant(ir::Constant::Int { value, .. }) => {
-            res.push(asm::Instruction::Pseudo(Pseudo::Li {
-                rd: or_register,
-                imm: value as u64,
-            }));
+            res.extend(mk_itype(
+                IType::Addi(DataSize::try_from(operand.dtype()).unwrap()),
+                or_register,
+                Register::Zero,
+                value as u64 as i64,
+            ));
             or_register
         }
         ir::Operand::Constant(ref c @ ir::Constant::Float { value, width }) => {
