@@ -465,7 +465,6 @@ fn translate_function(
         let instructions = translate_block(
             func_name,
             bid,
-            definition,
             block,
             &mut temp_block,
             &register_mp,
@@ -886,7 +885,6 @@ fn spill(
 fn translate_block(
     func_name: &str,
     bid: BlockId,
-    definition: &ir::FunctionDefinition,
     block: &ir::Block,
     temp_block: &mut Vec<asm::Block>,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
@@ -3566,7 +3564,7 @@ fn translate_block(
 
     match &block.exit {
         ir::BlockExit::Jump { arg } => {
-            gen_jump_arg(func_name, arg, &mut res, register_mp, definition, float_mp);
+            gen_jump_arg(func_name, arg, &mut res, register_mp, float_mp);
         }
 
         ir::BlockExit::ConditionalJump {
@@ -3586,7 +3584,6 @@ fn translate_block(
                 bid,
                 arg_else,
                 register_mp,
-                definition,
                 float_mp,
                 temp_block,
             );
@@ -3596,14 +3593,7 @@ fn translate_block(
                 rs2: Register::Zero,
                 imm: else_label,
             });
-            gen_jump_arg(
-                func_name,
-                arg_then,
-                &mut res,
-                register_mp,
-                definition,
-                float_mp,
-            );
+            gen_jump_arg(func_name, arg_then, &mut res, register_mp, float_mp);
         }
 
         ir::BlockExit::Switch {
@@ -3624,7 +3614,6 @@ fn translate_block(
                     bid,
                     jump_arg,
                     register_mp,
-                    definition,
                     float_mp,
                     temp_block,
                 );
@@ -3635,14 +3624,7 @@ fn translate_block(
                     imm: then_label,
                 })
             }
-            gen_jump_arg(
-                func_name,
-                default,
-                &mut res,
-                register_mp,
-                definition,
-                float_mp,
-            );
+            gen_jump_arg(func_name, default, &mut res, register_mp, float_mp);
         }
 
         ir::BlockExit::Return { value } => {
@@ -3709,12 +3691,10 @@ fn gen_jump_arg(
     jump_arg: &ir::JumpArg,
     res: &mut Vec<asm::Instruction>,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    definition: &ir::FunctionDefinition,
     float_mp: &mut FloatMp,
 ) {
-    let target_block = definition.blocks.get(&jump_arg.bid).unwrap();
     let mut v: Vec<(Register, Register, ir::Dtype)> = Vec::new();
-    for (aid, (_dtype, operand)) in izip!(&target_block.phinodes, &jump_arg.args).enumerate() {
+    for (aid, operand) in izip!(&jump_arg.args).enumerate() {
         match register_mp
             .get(&RegisterId::Arg {
                 bid: jump_arg.bid,
@@ -3771,7 +3751,6 @@ fn gen_jump_arg_or_new_block(
     from: BlockId,
     jump_arg: &ir::JumpArg,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    definition: &ir::FunctionDefinition,
     float_mp: &mut FloatMp,
     temp_block: &mut Vec<asm::Block>,
 ) -> Label {
@@ -3785,7 +3764,7 @@ fn gen_jump_arg_or_new_block(
         });
         let res: &mut Vec<asm::Instruction> = &mut temp_block.last_mut().unwrap().instructions;
 
-        gen_jump_arg(func_name, jump_arg, res, register_mp, definition, float_mp);
+        gen_jump_arg(func_name, jump_arg, res, register_mp, float_mp);
 
         label
     }
