@@ -745,6 +745,31 @@ fn mk_interference_graph(
                 .remove(&RegisterId::Temp { bid, iid });
         }
 
+        for (aid_1, dtype_1) in block.phinodes.iter().enumerate() {
+            for (aid_2, dtype_2) in block.phinodes.iter().enumerate() {
+                match (&**dtype_1, &**dtype_2) {
+                    (
+                        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
+                        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. },
+                    ) => {
+                        int_ig.add_edge(
+                            RegisterId::Arg { bid, aid: aid_1 },
+                            RegisterId::Arg { bid, aid: aid_2 },
+                            register_mp,
+                        );
+                    }
+                    (ir::Dtype::Float { .. }, ir::Dtype::Float { .. }) => {
+                        float_ig.add_edge(
+                            RegisterId::Arg { bid, aid: aid_1 },
+                            RegisterId::Arg { bid, aid: aid_2 },
+                            register_mp,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // remove phinode from live_set
         for (aid, dtype) in block.phinodes.iter().enumerate() {
             match &**dtype {
