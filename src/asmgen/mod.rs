@@ -223,8 +223,9 @@ fn translate_function(
                                 SType::store(dtype.clone().into_inner()),
                                 Register::S0,
                                 *register,
-                                stack_offset_2_s0
-                                    + <usize as TryInto<i64>>::try_into(offset).unwrap(),
+                                (stack_offset_2_s0
+                                    + <usize as TryInto<i64>>::try_into(offset).unwrap())
+                                    as u64,
                             ));
                         }
                         RegisterCouple::Double(register) => {
@@ -232,8 +233,9 @@ fn translate_function(
                                 SType::SD,
                                 Register::S0,
                                 *register,
-                                stack_offset_2_s0
-                                    + <usize as TryInto<i64>>::try_into(offset).unwrap(),
+                                (stack_offset_2_s0
+                                    + <usize as TryInto<i64>>::try_into(offset).unwrap())
+                                    as u64,
                             ));
                         }
                         RegisterCouple::MergedToPrevious => {}
@@ -262,7 +264,7 @@ fn translate_function(
             IType::Addi(DataSize::Double),
             Register::T0,
             Register::S0,
-            stack_offset_2_s0,
+            stack_offset_2_s0 as u64,
         ));
         while stack_offset_2_s0 % 8 != 0 {
             stack_offset_2_s0 -= 1;
@@ -272,7 +274,7 @@ fn translate_function(
             SType::SD,
             Register::S0,
             Register::T0,
-            stack_offset_2_s0,
+            stack_offset_2_s0 as u64,
         ));
         let None = register_mp.insert(RegisterId::Local { aid }, DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 : stack_offset_2_s0 } )) else {unreachable!()};
     }
@@ -359,7 +361,7 @@ fn translate_function(
                     SType::store(dtype.clone()),
                     Register::S0,
                     *reg,
-                    *offset_to_s0,
+                    *offset_to_s0 as u64,
                 ));
             }
             (
@@ -372,7 +374,12 @@ fn translate_function(
                 ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
                 DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }),
             ) => {
-                alloc_arg.extend(mk_stype(SType::SD, Register::S0, *reg, *offset_to_s0));
+                alloc_arg.extend(mk_stype(
+                    SType::SD,
+                    Register::S0,
+                    *reg,
+                    *offset_to_s0 as u64,
+                ));
             }
             (
                 // register to stack
@@ -410,33 +417,33 @@ fn translate_function(
         asm::SType::SD,
         Register::Sp,
         Register::Ra,
-        -stack_offset_2_s0 - 8,
+        (-stack_offset_2_s0 - 8) as u64,
     );
     let restore_ra: Vec<crate::asm::Instruction> = mk_itype(
         asm::IType::LD,
         Register::Ra,
         Register::Sp,
-        -stack_offset_2_s0 - 8,
+        (-stack_offset_2_s0 - 8) as u64,
     );
 
     let backup_s0: Vec<crate::asm::Instruction> = mk_stype(
         asm::SType::SD,
         Register::Sp,
         Register::S0,
-        -stack_offset_2_s0 - 16,
+        (-stack_offset_2_s0 - 16) as u64,
     );
     let restore_s0: Vec<crate::asm::Instruction> = mk_itype(
         asm::IType::LD,
         Register::S0,
         Register::Sp,
-        -stack_offset_2_s0 - 16,
+        (-stack_offset_2_s0 - 16) as u64,
     );
 
     let mut backup_ra_and_init_sp = mk_itype(
         asm::IType::Addi(DataSize::Double),
         Register::Sp,
         Register::Sp,
-        stack_offset_2_s0,
+        stack_offset_2_s0 as u64,
     );
     backup_ra_and_init_sp.extend(backup_ra);
     backup_ra_and_init_sp.extend(backup_s0);
@@ -444,7 +451,7 @@ fn translate_function(
         asm::IType::Addi(DataSize::Double),
         Register::S0,
         Register::Sp,
-        -stack_offset_2_s0,
+        (-stack_offset_2_s0) as u64,
     ));
     backup_ra_and_init_sp.extend(alloc_arg);
     backup_ra_and_init_sp.extend(init_allocation);
@@ -455,7 +462,7 @@ fn translate_function(
         asm::IType::Addi(DataSize::Double),
         Register::Sp,
         Register::Sp,
-        -stack_offset_2_s0,
+        (-stack_offset_2_s0) as u64,
     ));
     before_ret_instructions.push(asm::Instruction::Pseudo(Pseudo::Ret));
 
@@ -1020,7 +1027,7 @@ fn translate_block(
                                     IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                                     *dest_reg,
                                     Register::Zero,
-                                    value as u64 as i64,
+                                    value as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
@@ -1028,13 +1035,13 @@ fn translate_block(
                                     IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                                     Register::T0,
                                     Register::Zero,
-                                    value as u64 as i64,
+                                    value as u64,
                                 ));
                                 res.extend(mk_stype(
                                     SType::store(dtype.clone()),
                                     Register::S0,
                                     Register::T0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1070,7 +1077,7 @@ fn translate_block(
                                     SType::store(dtype.clone()),
                                     Register::S0,
                                     Register::FT0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1113,7 +1120,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T1,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1151,7 +1158,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT1,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1188,7 +1195,7 @@ fn translate_block(
                             SType::SW,
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1221,7 +1228,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             reg,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1255,7 +1262,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             reg,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1284,7 +1291,7 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                             *dest_reg,
                             Register::Zero,
-                            value as u64 as i64,
+                            value as u64,
                         ));
                     }
                     (
@@ -1311,13 +1318,13 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                             Register::T0,
                             Register::Zero,
-                            value as u64 as i64,
+                            value as u64,
                         ));
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -1339,7 +1346,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -1372,7 +1379,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             reg,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1401,7 +1408,7 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                             *dest_reg,
                             reg,
-                            *value as u64 as i64,
+                            *value as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
@@ -1409,13 +1416,13 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                             Register::T0,
                             reg,
-                            *value as u64 as i64,
+                            *value as u64,
                         ));
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1454,7 +1461,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1503,7 +1510,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1542,7 +1549,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1591,7 +1598,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1631,7 +1638,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1680,7 +1687,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1720,7 +1727,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1769,7 +1776,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1811,7 +1818,7 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(x.dtype()).unwrap()),
                             *dest_reg,
                             reg1,
-                            value as u64 as i64,
+                            value as u64,
                         ));
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
                             rd: *dest_reg,
@@ -1823,7 +1830,7 @@ fn translate_block(
                             IType::Addi(DataSize::try_from(x.dtype()).unwrap()),
                             Register::T0,
                             reg1,
-                            value as u64 as i64,
+                            value as u64,
                         ));
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
                             rd: Register::T0,
@@ -1833,7 +1840,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -1913,7 +1920,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -1963,7 +1970,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -2068,7 +2075,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -2124,7 +2131,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -2211,7 +2218,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -2279,7 +2286,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -2354,7 +2361,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -2410,7 +2417,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -2497,7 +2504,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -2568,7 +2575,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -2606,7 +2613,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -2646,7 +2653,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -2686,7 +2693,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -2726,7 +2733,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -2766,7 +2773,7 @@ fn translate_block(
                             SType::store(target_dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -2795,7 +2802,7 @@ fn translate_block(
                     IType::LD,
                     Register::T0,
                     Register::S0,
-                    offset_to_s0,
+                    offset_to_s0 as u64,
                 ));
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
@@ -2824,7 +2831,7 @@ fn translate_block(
                     IType::LD,
                     Register::T0,
                     Register::S0,
-                    offset_to_s0,
+                    offset_to_s0 as u64,
                 ));
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
@@ -2863,7 +2870,7 @@ fn translate_block(
                             IType::LD,
                             Register::T3,
                             Register::S0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                         Register::T3
                     }
@@ -2899,7 +2906,7 @@ fn translate_block(
                                     IType::LD,
                                     Register::T2,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                                 Register::T2
                             }
@@ -2959,7 +2966,7 @@ fn translate_block(
                             IType::LD,
                             Register::T2,
                             Register::S0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                         Register::T2
                     }
@@ -3024,7 +3031,7 @@ fn translate_block(
                         SType::store(dtype.clone()),
                         Register::S0,
                         Register::T0,
-                        *offset_to_s0,
+                        *offset_to_s0 as u64,
                     ));
                 }
                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3062,7 +3069,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::FT0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3106,7 +3113,7 @@ fn translate_block(
                         IType::Addi(DataSize::Double),
                         Register::Sp,
                         Register::Sp,
-                        -(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap()),
+                        (-(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap())) as u64,
                     ));
                 }
                 for (operand, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
@@ -3159,7 +3166,7 @@ fn translate_block(
                                     IType::Addi(DataSize::Double),
                                     target_reg,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Reg(_)) => unreachable!(),
@@ -3172,7 +3179,7 @@ fn translate_block(
                                     IType::LD,
                                     target_reg,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
@@ -3199,13 +3206,13 @@ fn translate_block(
                                     IType::Addi(DataSize::Double),
                                     Register::T0,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                                 res.extend(mk_stype(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     Register::T0,
-                                    target_offset,
+                                    target_offset as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Reg(_)) => {
@@ -3216,13 +3223,13 @@ fn translate_block(
                                     IType::LD,
                                     Register::T0,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                                 res.extend(mk_stype(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     Register::T0,
-                                    target_offset,
+                                    target_offset as u64,
                                 ));
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
@@ -3230,7 +3237,7 @@ fn translate_block(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     *reg,
-                                    target_offset,
+                                    target_offset as u64,
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3284,9 +3291,10 @@ fn translate_block(
                                             IType::load((*dtype).clone()),
                                             register,
                                             Register::S0,
-                                            base_offset
+                                            (base_offset
                                                 + <usize as TryInto<i64>>::try_into(offset)
-                                                    .unwrap(),
+                                                    .unwrap())
+                                                as u64,
                                         ));
                                     }
                                     RegisterCouple::Double(register) => {
@@ -3294,9 +3302,10 @@ fn translate_block(
                                             IType::LD,
                                             register,
                                             Register::S0,
-                                            base_offset
+                                            (base_offset
                                                 + <usize as TryInto<i64>>::try_into(offset)
-                                                    .unwrap(),
+                                                    .unwrap())
+                                                as u64,
                                         ));
                                     }
                                     RegisterCouple::MergedToPrevious => {}
@@ -3315,7 +3324,7 @@ fn translate_block(
                             IType::Addi(DataSize::Double),
                             Register::T0,
                             Register::S0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                         res.extend(mk_stype(SType::SD, Register::Sp, Register::T0, 0));
                     }
@@ -3342,7 +3351,7 @@ fn translate_block(
                                     IType::LD,
                                     Register::T0,
                                     Register::S0,
-                                    *offset_to_s0,
+                                    *offset_to_s0 as u64,
                                 ));
                                 Register::T0
                             }
@@ -3373,7 +3382,7 @@ fn translate_block(
                                         SType::store(ret_dtype.clone()),
                                         Register::S0,
                                         Register::A0,
-                                        *offset_to_s0,
+                                        *offset_to_s0 as u64,
                                     ));
                                 }
                                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3397,7 +3406,7 @@ fn translate_block(
                                         SType::store(ret_dtype.clone()),
                                         Register::S0,
                                         Register::FA0,
-                                        *offset_to_s0,
+                                        *offset_to_s0 as u64,
                                     ));
                                 }
                                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3460,7 +3469,7 @@ fn translate_block(
                             SType::store(to.clone()),
                             Register::S0,
                             reg,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -3502,7 +3511,7 @@ fn translate_block(
                             SType::store(to.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -3557,7 +3566,7 @@ fn translate_block(
                             SType::store(to.clone()),
                             Register::S0,
                             Register::FT1,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     (
@@ -3605,7 +3614,7 @@ fn translate_block(
                             SType::store(to.clone()),
                             Register::S0,
                             Register::FT1,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     _ => unreachable!(),
@@ -3661,7 +3670,7 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3722,7 +3731,7 @@ fn translate_block(
                     IType::Addi(DataSize::try_from(dtype.clone()).unwrap()),
                     Register::T1,
                     Register::Zero,
-                    *value as u64 as i64,
+                    *value as u64,
                 ));
                 let then_label = gen_jump_arg_or_new_block(
                     func_name,
@@ -3832,7 +3841,7 @@ fn gen_jump_arg(
                             IType::load(dtype.clone()),
                             *dest_reg,
                             Register::S0,
-                            *offset_to_s0,
+                            *offset_to_s0 as u64,
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
@@ -3900,7 +3909,7 @@ fn load_operand_to_reg(
                 IType::Addi(DataSize::try_from(operand.dtype()).unwrap()),
                 or_register,
                 Register::Zero,
-                value as u64 as i64,
+                value as u64,
             ));
             or_register
         }
@@ -3947,7 +3956,7 @@ fn load_operand_to_reg(
                     IType::load(dtype),
                     or_register,
                     Register::S0,
-                    *offset_to_s0,
+                    *offset_to_s0 as u64,
                 ));
                 or_register
             }
@@ -4004,7 +4013,7 @@ fn operand_to_stack(
                 SType::store(dtype),
                 target_register,
                 reg,
-                target_base as i64,
+                target_base,
             ));
         }
         dtype @ ir::Dtype::Float { .. } => {
@@ -4013,7 +4022,7 @@ fn operand_to_stack(
                 SType::store(dtype),
                 target_register,
                 reg,
-                target_base as i64,
+                target_base,
             ));
         }
         ir::Dtype::Array { .. } => unreachable!(),
@@ -4039,13 +4048,13 @@ fn cp_from_indirect_source(
                 asm::IType::load(dtype.clone()),
                 Register::T0,
                 src_location,
-                offset,
+                offset as u64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype.clone()),
                 Register::S0,
                 Register::T0,
-                target_base_to_s0 + offset,
+                (target_base_to_s0 + offset) as u64,
             ));
         }
         ir::Dtype::Float { .. } => {
@@ -4053,7 +4062,7 @@ fn cp_from_indirect_source(
                 asm::IType::load(dtype.clone()),
                 Register::FT0,
                 src_location,
-                offset,
+                offset as u64,
             ));
             res.push(asm::Instruction::SType {
                 instr: SType::store(dtype.clone()),
@@ -4132,13 +4141,13 @@ fn cp_to_indirect_target(
                 IType::load(dtype.clone()),
                 Register::T0,
                 source_reg,
-                source_base + offset,
+                (source_base + offset) as u64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
                 dest_location,
                 Register::T0,
-                offset,
+                offset as u64,
             ));
         }
         ir::Dtype::Float { .. } => {
@@ -4146,13 +4155,13 @@ fn cp_to_indirect_target(
                 IType::load(dtype.clone()),
                 Register::FT0,
                 source_reg,
-                source_base + offset,
+                (source_base + offset) as u64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
                 dest_location,
                 Register::FT0,
-                offset,
+                offset as u64,
             ));
         }
         ir::Dtype::Array { inner, size } => {
@@ -4225,13 +4234,13 @@ fn cp_from_indirect_to_indirect(
                 IType::load(dtype.clone()),
                 Register::T0,
                 source_location,
-                offset,
+                offset as u64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
                 dest_location,
                 Register::T0,
-                offset,
+                offset as u64,
             ));
         }
         ir::Dtype::Float { .. } => {
@@ -4239,13 +4248,13 @@ fn cp_from_indirect_to_indirect(
                 IType::load(dtype.clone()),
                 Register::FT0,
                 source_location,
-                offset,
+                offset as u64,
             ));
             res.extend(mk_stype(
                 SType::store(dtype),
                 dest_location,
                 Register::FT0,
-                offset,
+                offset as u64,
             ));
         }
         ir::Dtype::Array { inner, size } => {
@@ -4755,19 +4764,19 @@ impl FloatMp {
     }
 }
 
-fn mk_itype(instr: IType, rd: Register, rs1: Register, imm: i64) -> Vec<asm::Instruction> {
-    if (-2048..=2047).contains(&imm) {
+fn mk_itype(instr: IType, rd: Register, rs1: Register, imm: u64) -> Vec<asm::Instruction> {
+    if (-2048..=2047).contains(&(imm as i64)) {
         vec![asm::Instruction::IType {
             instr,
             rd,
             rs1,
-            imm: Immediate::Value(imm as u64),
+            imm: Immediate::Value(imm),
         }]
     } else {
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
                 rd: Register::T4,
-                imm: imm as u64,
+                imm: imm,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
@@ -4785,19 +4794,19 @@ fn mk_itype(instr: IType, rd: Register, rs1: Register, imm: i64) -> Vec<asm::Ins
     }
 }
 
-fn mk_stype(instr: SType, rs1: Register, rs2: Register, imm: i64) -> Vec<asm::Instruction> {
-    if (-2048..=2047).contains(&imm) {
+fn mk_stype(instr: SType, rs1: Register, rs2: Register, imm: u64) -> Vec<asm::Instruction> {
+    if (-2048..=2047).contains(&(imm as i64)) {
         vec![asm::Instruction::SType {
             instr,
             rs1,
             rs2,
-            imm: Immediate::Value(imm as u64),
+            imm: Immediate::Value(imm),
         }]
     } else {
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
                 rd: Register::T4,
-                imm: imm as u64,
+                imm: imm,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
