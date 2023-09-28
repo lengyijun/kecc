@@ -1106,18 +1106,20 @@ fn translate_block(
                 );
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                     DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::neg(
-                            dtype.clone(),
-                            *dest_reg,
-                            reg,
-                        )));
+                        res.push(asm::Instruction::RType {
+                            instr: RType::sub(dtype.clone()),
+                            rd: *dest_reg,
+                            rs1: Register::Zero,
+                            rs2: Some(reg),
+                        });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::neg(
-                            dtype.clone(),
-                            Register::T1,
-                            reg,
-                        )));
+                        res.push(asm::Instruction::RType {
+                            instr: RType::sub(dtype.clone()),
+                            rd: Register::T1,
+                            rs1: Register::Zero,
+                            rs2: Some(reg),
+                        });
                         res.extend(mk_stype(
                             SType::store(dtype.clone()),
                             Register::S0,
