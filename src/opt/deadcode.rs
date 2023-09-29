@@ -235,7 +235,9 @@ fn clear_phinode(code: &mut FunctionDefinition) -> bool {
 
     drop(used_phinode);
 
-    let None = unused_phinodes.remove(&code.bid_init) else {unreachable!()};
+    let None = unused_phinodes.remove(&code.bid_init) else {
+        unreachable!()
+    };
     let unused_phinodes = unused_phinodes;
 
     for (bid, v) in &unused_phinodes {
@@ -271,7 +273,9 @@ fn clear_phinode(code: &mut FunctionDefinition) -> bool {
             let _x = block.phinodes.remove(*x);
         }
 
-        let Some(prev_bids) = pred.get(&bid) else {continue};
+        let Some(prev_bids) = pred.get(&bid) else {
+            continue;
+        };
         for prev_bid in prev_bids {
             code.blocks
                 .get_mut(prev_bid)

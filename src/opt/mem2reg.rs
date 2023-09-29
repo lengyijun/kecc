@@ -44,7 +44,7 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
                             ..
                         } = ptr
                         {
-                            stores.entry(*aid).or_insert_with(Vec::new).push(*bid);
+                            stores.entry(*aid).or_default().push(*bid);
                         }
                     }
                     ir::Instruction::Load { .. } => {}
@@ -173,16 +173,24 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
                                                 }
                                             }
                                         };
-                                        let None = end_values.insert((*aid, *bid), res.clone()) else {unreachable!()};
+                                        let None = end_values.insert((*aid, *bid), res.clone())
+                                        else {
+                                            unreachable!()
+                                        };
                                         res
                                     }
                                 }
                             };
 
                             for bid in vec.into_iter() {
-                                let None = end_values.insert((*aid, bid), var.clone()) else {unreachable!()};
+                                let None = end_values.insert((*aid, bid), var.clone()) else {
+                                    unreachable!()
+                                };
                             }
-                            let None = replaces.insert(RegisterId::Temp { bid : *bid, iid: i }, var) else {unreachable!()};
+                            let None = replaces.insert(RegisterId::Temp { bid: *bid, iid: i }, var)
+                            else {
+                                unreachable!()
+                            };
                         }
                     }
                     _ => {}
@@ -198,7 +206,9 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
 
         while let Some((aid, bid)) = vec.pop() {
             if visited.insert((aid, bid)) {
-                let true = btree_set.insert((aid, bid)) else {unreachable!()};
+                let true = btree_set.insert((aid, bid)) else {
+                    unreachable!()
+                };
                 match end_values.entry((aid, bid)) {
                     std::collections::hash_map::Entry::Occupied(o) => {
                         let x = o.get();
@@ -235,7 +245,7 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
         let mut jiqian: HashMap<(usize, BlockId), usize> = HashMap::new();
 
         for (aid, bid) in btree_set {
-            jiting.entry(bid).or_insert(Vec::new()).push(aid);
+            jiting.entry(bid).or_default().push(aid);
             let name = code.allocations.get(aid).unwrap().name();
             let dtype = code.allocations.get(aid).unwrap().clone().into_inner();
             code.blocks
@@ -246,7 +256,9 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
             let None = jiqian.insert(
                 (aid, bid),
                 code.blocks.get(&bid).unwrap().phinodes.len() - 1,
-            ) else {unreachable!()};
+            ) else {
+                unreachable!()
+            };
         }
 
         // only use the allocation part
@@ -398,9 +410,13 @@ pub fn calculate_dominator(
     });
 
     let mut res: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-    let None = res.insert(code.bid_init, HashSet::from([code.bid_init])) else {unreachable!()};
+    let None = res.insert(code.bid_init, HashSet::from([code.bid_init])) else {
+        unreachable!()
+    };
     for (bid, _) in iter.clone() {
-        let None = res.insert(*bid, N.clone()) else {unreachable!()};
+        let None = res.insert(*bid, N.clone()) else {
+            unreachable!()
+        };
     }
 
     let mut changed = true;
@@ -417,7 +433,9 @@ pub fn calculate_dominator(
 
             if &x != res.get(bid).unwrap() {
                 changed = true;
-                let Some(_) = res.insert(*bid, x) else { unreachable!() } ;
+                let Some(_) = res.insert(*bid, x) else {
+                    unreachable!()
+                };
             }
         }
     }
@@ -440,7 +458,9 @@ pub fn calculate_idom(
                     .cloned()
                     .collect::<HashSet<BlockId>>()
             {
-                let None = idom.insert(*b, *a) else {unreachable!()};
+                let None = idom.insert(*b, *a) else {
+                    unreachable!()
+                };
                 continue 'outer;
             }
         }
@@ -464,10 +484,12 @@ impl FunctionDefinition {
         let mut hm: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
         for (&id, b) in &self.blocks {
             for next_id in successor(&b.exit) {
-                let _b = hm.entry(next_id).or_insert(HashSet::new()).insert(id);
+                let _b = hm.entry(next_id).or_default().insert(id);
             }
         }
-        let None = hm.insert(self.bid_init, HashSet::new()) else {unreachable!()};
+        let None = hm.insert(self.bid_init, HashSet::new()) else {
+            unreachable!()
+        };
         hm
     }
 
@@ -500,7 +522,9 @@ fn dfs_walker(
     visited: &mut HashSet<BlockId>,
     order: &mut Vec<BlockId>,
 ) {
-    let true = visited.insert(node) else {unreachable!()};
+    let true = visited.insert(node) else {
+        unreachable!()
+    };
     for succ in successor(&code.blocks.get(&node).unwrap().exit) {
         if !visited.contains(&succ) {
             dfs_walker(succ, code, visited, order);
@@ -531,7 +555,7 @@ fn dominance_frontier(
 ) -> HashMap<BlockId, HashSet<BlockId>> {
     let mut dom = dom.clone();
     for (k, v) in dom.iter_mut() {
-        let true =  v.remove(k) else {unreachable!()};
+        let true = v.remove(k) else { unreachable!() };
     }
     let mut df: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
     for x in dom.keys() {
@@ -545,11 +569,13 @@ fn dominance_frontier(
                     }
                 }
                 if b {
-                    let true = hs.insert(*y) else {unreachable!()};
+                    let true = hs.insert(*y) else { unreachable!() };
                 }
             }
         }
-        let None = df.insert(*x, hs) else {unreachable!()};
+        let None = df.insert(*x, hs) else {
+            unreachable!()
+        };
     }
     df
 }

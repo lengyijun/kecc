@@ -172,10 +172,14 @@ impl Optimize<FunctionDefinition> for SimplifyCfgMerge {
         let mut res = false;
         let iter = prev.into_iter().filter_map(|(bid, a)| a.map(|x| (bid, x)));
         for (next_bid, (prev_bid, args)) in iter {
-            let Some(next_block ) = code.blocks.remove(&next_bid) else {continue };
-            let Some(prev_block ) = code.blocks.get_mut(&prev_bid) else {
-                let None = code.blocks.insert(next_bid, next_block) else {unreachable!()};
-                continue
+            let Some(next_block) = code.blocks.remove(&next_bid) else {
+                continue;
+            };
+            let Some(prev_block) = code.blocks.get_mut(&prev_bid) else {
+                let None = code.blocks.insert(next_bid, next_block) else {
+                    unreachable!()
+                };
+                continue;
             };
             res = true;
 

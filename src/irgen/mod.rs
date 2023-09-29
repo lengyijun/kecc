@@ -1977,7 +1977,13 @@ impl IrgenFunc<'_> {
             }
             BinaryOperator::Assign => {
                 let ptr = self.translate_expr_lvalue(node_1, context)?;
-                let (ir::Dtype::Pointer { inner , .. } | ir::Dtype::Array { inner, ..}) = ptr.dtype() else { return Err(IrgenErrorMessage::Misc { message: "expect ptr".to_owned() }) };
+                let (ir::Dtype::Pointer { inner, .. } | ir::Dtype::Array { inner, .. }) =
+                    ptr.dtype()
+                else {
+                    return Err(IrgenErrorMessage::Misc {
+                        message: "expect ptr".to_owned(),
+                    });
+                };
                 let value = self.translate_expr_rvalue(node_2, context)?;
                 let value = self.translate_typecast(value, *inner, context)?;
                 let _x = context.insert_instruction(ir::Instruction::Store {
@@ -2483,7 +2489,10 @@ impl IrgenFunc<'_> {
             fields,
             size_align_offsets,
             ..
-        } = struct_type else { panic!("expect a struct type, meet {struct_type}") };
+        } = struct_type
+        else {
+            panic!("expect a struct type, meet {struct_type}")
+        };
 
         if let (Some(fields), Some(size_align_offsets)) =
             (fields.as_ref(), size_align_offsets.as_ref())
@@ -2647,7 +2656,14 @@ impl IrgenFunc<'_> {
             .unwrap()
             .as_ref()
             .unwrap();
-        let ir::Dtype::Struct {fields : Some(fields),  size_align_offsets : Some((_, _, offsets)), ..} = struct_dtype else {panic!("expect struct")};
+        let ir::Dtype::Struct {
+            fields: Some(fields),
+            size_align_offsets: Some((_, _, offsets)),
+            ..
+        } = struct_dtype
+        else {
+            panic!("expect struct")
+        };
         for (field, &offset, init_value) in izip!(fields, offsets, initializer) {
             let dtype = ir::Dtype::Pointer {
                 inner: Box::new(field.deref().clone()),
@@ -2832,8 +2848,22 @@ fn usual_arithmetic_conversions(dtype_1: ir::Dtype, dtype_2: ir::Dtype) -> ir::D
     if int_1 == int_2 {
         return int_1;
     }
-    let ir::Dtype::Int{ width : width_1, is_signed: is_signed_1, ..} = int_1 else { unreachable!()};
-    let ir::Dtype::Int{ width : width_2, is_signed: is_signed_2, ..} = int_2 else { unreachable!()};
+    let ir::Dtype::Int {
+        width: width_1,
+        is_signed: is_signed_1,
+        ..
+    } = int_1
+    else {
+        unreachable!()
+    };
+    let ir::Dtype::Int {
+        width: width_2,
+        is_signed: is_signed_2,
+        ..
+    } = int_2
+    else {
+        unreachable!()
+    };
 
     if is_signed_1 == is_signed_2 {
         return ir::Dtype::Int {

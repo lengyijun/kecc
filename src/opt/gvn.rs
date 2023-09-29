@@ -104,12 +104,18 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                 };
                 match operand {
                     Operand::Constant(c) => {
-                        let None = register_table.insert(rid, NumOrConstant::Constant(c)) else {unreachable!()};
+                        let None = register_table.insert(rid, NumOrConstant::Constant(c)) else {
+                            unreachable!()
+                        };
                     }
                     Operand::Register { .. } => {
                         let num = num.next();
-                        let None = register_table.insert(rid, NumOrConstant::Num(num)) else {unreachable!()};
-                        let None = leader_table_vec.last_mut().unwrap().insert(num, operand ) else {unreachable!()};
+                        let None = register_table.insert(rid, NumOrConstant::Num(num)) else {
+                            unreachable!()
+                        };
+                        let None = leader_table_vec.last_mut().unwrap().insert(num, operand) else {
+                            unreachable!()
+                        };
                     }
                 }
             }
@@ -212,7 +218,9 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                                     }
                                     ListItem::Same(Some(operand)) => {
                                         for x in leader_table_vec.iter_mut() {
-                                            let None = x.insert(num, operand.clone()) else {unreachable!()};
+                                            let None = x.insert(num, operand.clone()) else {
+                                                unreachable!()
+                                            };
                                         }
                                     }
                                     ListItem::Same(None) => {
@@ -223,12 +231,15 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                                             let aid = *phinode_offset.get(&bid).unwrap();
                                             let _ = phinode_offset.insert(bid, aid + 1).unwrap();
                                             for x in leader_table_vec.iter_mut() {
-                                                let None = x.insert(num,
+                                                let None = x.insert(
+                                                    num,
                                                     Operand::Register {
                                                         rid: RegisterId::arg(bid, aid),
                                                         dtype: dtype.clone(),
-                                                    }
-                                                ) else {unreachable!()};
+                                                    },
+                                                ) else {
+                                                    unreachable!()
+                                                };
                                             }
                                             phinode_vec.push((num, dtype.clone()));
                                         } else {
@@ -243,16 +254,19 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                     std::collections::hash_map::Entry::Vacant(v) => {
                         let num = num.next();
                         let _ = v.insert(num);
-                        let None = leader_table.insert(
-                                        num,
-                                        operand
-                                    ) else {unreachable!()};
+                        let None = leader_table.insert(num, operand) else {
+                            unreachable!()
+                        };
                         num
                     }
                 };
                 assert!(leader_table_vec.last_mut().unwrap().get(&num).is_some());
-                let None = register_table
-                                    .insert(ir::RegisterId::Temp { bid, iid: i }, NumOrConstant::Num(num)) else {unreachable!()};
+                let None = register_table.insert(
+                    ir::RegisterId::Temp { bid, iid: i },
+                    NumOrConstant::Num(num),
+                ) else {
+                    unreachable!()
+                };
             }
 
             for (num, dtype) in phinode_vec.into_iter() {
@@ -330,7 +344,9 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
                 }
             }
 
-            let None = leader_tables.insert(bid, leader_table_vec) else {unreachable!()};
+            let None = leader_tables.insert(bid, leader_table_vec) else {
+                unreachable!()
+            };
         }
 
         modified
