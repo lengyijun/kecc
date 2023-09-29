@@ -178,7 +178,7 @@ fn translate_function(
                     ir::Dtype::Float { .. } => {
                         let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure )) else {unreachable!()};
                     }
-                    _ => unreachable!(),
+                    _ => unreachable!("{dtype}"),
                 }
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
@@ -5823,7 +5823,7 @@ fn mv_register(src: Register, target: Register, dtype: ir::Dtype) -> Vec<asm::In
                 data_size: DataSize::try_from(dtype).unwrap(),
             })]
         }
-        _ => unreachable!(),
+        _ => unreachable!("{dtype}"),
     }
 }
 
