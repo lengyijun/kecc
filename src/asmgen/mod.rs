@@ -4231,7 +4231,12 @@ fn translate_block(
                             }
                             (16, true) => unimplemented!(),
                             (16, false) => unimplemented!(),
-                            (32, true) => unimplemented!(),
+                            (32, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::SextW {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
                             (32, false) => unimplemented!(),
                             (64, true) => unimplemented!(),
                             (64, false) => unimplemented!(),
