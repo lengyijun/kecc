@@ -4,7 +4,9 @@ use crate::asm::{
     self, DataSize, Directive, IType, Immediate, Label, Pseudo, RType, Register, SType, Section,
     TranslationUnit,
 };
-use crate::ir::{self, BlockId, Declaration, FunctionSignature, HasDtype, RegisterId, Value};
+use crate::ir::{
+    self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
+};
 use crate::Translate;
 use itertools::izip;
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
@@ -131,7 +133,7 @@ impl Translate<ir::TranslationUnit> for Asmgen {
 fn translate_function(
     func_name: &str,
     signature: &FunctionSignature,
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     source: &ir::TranslationUnit,
     float_mp: &mut FloatMp,
@@ -932,7 +934,7 @@ fn translate_function(
 }
 
 fn alloc_register(
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     stack_offset_2_s0: &mut i64,
 ) {
@@ -1067,7 +1069,7 @@ impl GraphWrapper {
 }
 
 fn int_inter_block_liveness_graph(
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> LivenessRes {
     // def can be aggressive
@@ -1111,7 +1113,7 @@ fn int_inter_block_liveness_graph(
 }
 
 fn float_inter_block_liveness_graph(
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> LivenessRes {
     // def can be aggressive
@@ -1155,7 +1157,7 @@ fn float_inter_block_liveness_graph(
 }
 
 fn int_interference_graph(
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut int_ig: GraphWrapper = GraphWrapper::default();
@@ -1180,14 +1182,7 @@ fn int_interference_graph(
     }
 
     for aid in 0..definition.allocations.len() {
-        for (x, _) in definition
-            .blocks
-            .get(&definition.bid_init)
-            .unwrap()
-            .phinodes
-            .iter()
-            .enumerate()
-        {
+        for (x, _) in definition.get_init_block().phinodes.iter().enumerate() {
             int_ig.add_edge(
                 RegisterId::Local { aid },
                 RegisterId::Arg {
@@ -1250,7 +1245,7 @@ fn int_interference_graph(
 }
 
 fn float_interference_graph(
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut float_ig: GraphWrapper = GraphWrapper::default();
@@ -6118,7 +6113,7 @@ struct LivenessRes {
 fn gen_kill(
     def: &HashMap<BlockId, Vec<RegisterId>>,
     usee: &HashMap<BlockId, Vec<RegisterId>>,
-    definition: &ir::FunctionDefinition,
+    definition: &FunctionDefinition,
 ) -> LivenessRes {
     let mut liveness_res = LivenessRes::default();
 
@@ -6182,5 +6177,11 @@ impl DataSize {
             DataSize::SinglePrecision => unreachable!(),
             DataSize::DoublePrecision => unreachable!(),
         }
+    }
+}
+
+impl FunctionDefinition {
+    fn get_init_block(&self) -> &ir::Block {
+        self.blocks.get(&self.bid_init).unwrap()
     }
 }
