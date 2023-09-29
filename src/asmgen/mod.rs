@@ -426,13 +426,14 @@ fn translate_function(
                     Register::T0,
                     stack_offset_2_s0 as u64,
                 ));
-                // TODO: fix later
-                let _x = register_mp.insert(
+                let Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure)) = register_mp.insert(
                     RegisterId::Local { aid },
                     DirectOrInDirect::Direct(RegOrStack::Stack {
                         offset_to_s0: stack_offset_2_s0,
                     }),
-                );
+                ) else {
+                    unreachable!()
+                };
             }
             DirectOrInDirect::Direct(RegOrStack::Reg(reg)) => {
                 init_allocation.extend(mk_itype(
