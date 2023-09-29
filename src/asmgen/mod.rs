@@ -2632,6 +2632,71 @@ fn translate_block(
                 }
             }
 
+            // all shr is i32
+            ir::Instruction::BinOp {
+                op: BinaryOperator::ShiftRight,
+                lhs,
+                rhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
+                dtype:
+                    target_dtype @ ir::Dtype::Int {
+                        width: 32,
+                        is_signed: true,
+                        ..
+                    },
+            } => {
+                let reg0 =
+                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
+
+                let instr = match lhs.dtype() {
+                    ir::Dtype::Int {
+                        width: 32,
+                        is_signed: true,
+                        ..
+                    } => IType::Srai(DataSize::Double),
+                    ir::Dtype::Int {
+                        width: 32,
+                        is_signed: false,
+                        ..
+                    } => IType::Srli(DataSize::Word),
+                    _ => unreachable!(),
+                };
+                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
+                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
+                        res.push(asm::Instruction::IType {
+                            instr,
+                            rd: *dest_reg,
+                            rs1: reg0,
+                            imm: Immediate::Value(*value as u64),
+                        });
+                    }
+                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                        res.push(asm::Instruction::IType {
+                            instr,
+                            rd: Register::T0,
+                            rs1: reg0,
+                            imm: Immediate::Value(*value as u64),
+                        });
+                        res.extend(mk_stype(
+                            SType::store(target_dtype.clone()),
+                            Register::S0,
+                            Register::T0,
+                            *offset_to_s0 as u64,
+                        ));
+                    }
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    DirectOrInDirect::InDirect(_) => unreachable!(),
+                }
+            }
+            ir::Instruction::BinOp {
+                op: BinaryOperator::ShiftRight,
+                rhs: ir::Operand::Constant(ir::Constant::Int { .. }),
+                dtype: ir::Dtype::Int { .. },
+                ..
+            } => {
+                unreachable!()
+            }
+
             ir::Instruction::BinOp {
                 op: BinaryOperator::ShiftRight,
                 lhs,
