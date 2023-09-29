@@ -3237,30 +3237,25 @@ fn translate_block(
 
             ir::Instruction::Store {
                 ptr:
-                    ir::Operand::Register {
-                        rid,
+                    ptr @ ir::Operand::Register {
                         dtype: ir::Dtype::Pointer { inner, .. },
+                        ..
                     },
                 value: operand @ ir::Operand::Constant(ir::Constant::Int { .. }),
             } => {
-                let reg1 = load_operand_to_reg(
+                let rs2 = load_operand_to_reg(
                     operand.clone(),
                     Register::T1,
                     &mut res,
                     register_mp,
                     float_mp,
                 );
-                let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) = *register_mp.get(rid).unwrap() else {unreachable!()};
-                res.extend(mk_itype(
-                    IType::LD,
-                    Register::T0,
-                    Register::S0,
-                    offset_to_s0 as u64,
-                ));
+                let rs1 =
+                    load_operand_to_reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
-                    rs1: Register::T0,
-                    rs2: reg1,
+                    rs1,
+                    rs2,
                     imm: Immediate::Value(0),
                 });
             }
