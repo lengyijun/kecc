@@ -171,15 +171,8 @@ fn translate_function(
                 let None = register_mp.insert(register_id, DirectOrInDirect::Direct( RegOrStack::Stack { offset_to_s0: *offset_to_s0 })) else {unreachable!()};
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(_))) => {
-                match dtype {
-                    ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                        let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure )) else {unreachable!()};
-                    }
-                    ir::Dtype::Float { .. } => {
-                        let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure )) else {unreachable!()};
-                    }
-                    _ => unreachable!("{dtype}"),
-                }
+                // must be a struct
+                let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure )) else {unreachable!()};
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
