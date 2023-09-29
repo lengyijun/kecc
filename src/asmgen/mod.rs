@@ -5803,7 +5803,7 @@ fn backup_register(
 
 fn mv_register(src: Register, target: Register, dtype: ir::Dtype) -> Vec<asm::Instruction> {
     match &dtype {
-        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
+        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Struct { .. } => {
             vec![asm::Instruction::Pseudo(Pseudo::Mv {
                 rd: target,
                 rs: src,
