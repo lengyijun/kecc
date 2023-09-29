@@ -938,8 +938,16 @@ fn alloc_register(
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     stack_offset_2_s0: &mut i64,
 ) {
+    let reserved_rids = definition.get_rid_in_loop();
+
     let mut int_ig = int_interference_graph(definition, register_mp);
-    spills(&mut int_ig, &INT_REGISTERS, stack_offset_2_s0, register_mp);
+    spills(
+        &mut int_ig,
+        &INT_REGISTERS,
+        stack_offset_2_s0,
+        &reserved_rids,
+        register_mp,
+    );
     color(int_ig, &INT_REGISTERS, register_mp);
 
     let mut float_ig = float_interference_graph(definition, register_mp);
@@ -947,9 +955,9 @@ fn alloc_register(
         &mut float_ig,
         &FLOAT_REGISTERS,
         stack_offset_2_s0,
+        &reserved_rids,
         register_mp,
     );
-
     color(float_ig, &FLOAT_REGISTERS, register_mp);
 }
 
@@ -1314,6 +1322,7 @@ fn spills(
     ig: &mut GraphWrapper,
     colors: &[Register],
     stack_offset_2_s0: &mut i64,
+    reserved_rids: &HashSet<RegisterId>,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
     loop {
@@ -1344,13 +1353,19 @@ fn spills(
         }
         let mut removed_nodes: HashSet<NodeIndex> = HashSet::new();
         for clique in max_cliques {
-            let clique: Vec<NodeIndex> = clique
+            let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = clique
                 .into_iter()
                 .filter(|x| !removed_nodes.contains(x))
-                .collect();
-            if clique.len() > colors.len() {
-                let k = clique.len() - colors.len();
-                for node in clique.iter().take(k) {
+                .partition(|node_index| {
+                    reserved_rids.contains(ig.node_index_2_register_id.get(node_index).unwrap())
+                });
+            if reserved_node_index.len() + to_be_spilled.len() > colors.len() {
+                let count = reserved_node_index.len() + to_be_spilled.len() - colors.len();
+                for node in to_be_spilled
+                    .iter()
+                    .chain(reserved_node_index.iter())
+                    .take(count)
+                {
                     if removed_nodes.insert(*node) {
                         spill(
                             *ig.node_index_2_register_id.get(node).unwrap(),
@@ -6183,5 +6198,65 @@ impl DataSize {
 impl FunctionDefinition {
     fn get_init_block(&self) -> &ir::Block {
         self.blocks.get(&self.bid_init).unwrap()
+    }
+
+    fn get_bid_in_loop(&self) -> HashSet<BlockId> {
+        let mut res: HashSet<BlockId> = HashSet::new();
+        let mut graph: petgraph::Graph<(), (), petgraph::Directed> = Default::default();
+        let mut bid_2_node_index: HashMap<BlockId, NodeIndex> = HashMap::new();
+        let mut node_index_2_bid: HashMap<NodeIndex, BlockId> = HashMap::new();
+        for &bid in self.blocks.keys() {
+            let node_index = graph.add_node(());
+            let None = bid_2_node_index.insert(bid, node_index) else {
+                unreachable!()
+            };
+            let None = node_index_2_bid.insert(node_index, bid) else {
+                unreachable!()
+            };
+        }
+
+        for (&curr_bid, block) in &self.blocks {
+            for next_bid in block.exit.walk_jump_bid() {
+                if curr_bid == next_bid {
+                    let true = res.insert(curr_bid) else {
+                        unreachable!()
+                    };
+                } else {
+                    let _ = graph.add_edge(
+                        *bid_2_node_index.get(&curr_bid).unwrap(),
+                        *bid_2_node_index.get(&next_bid).unwrap(),
+                        (),
+                    );
+                }
+            }
+        }
+
+        let loops: Vec<BlockId> = petgraph::algo::tarjan_scc(&graph)
+            .into_iter()
+            .filter(|x| x.len() > 1)
+            .flatten()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|node_index| *node_index_2_bid.get(&node_index).unwrap())
+            .collect();
+
+        res.extend(loops);
+        res
+    }
+
+    fn get_rid_in_loop(&self) -> HashSet<RegisterId> {
+        let bid_in_loop = self.get_bid_in_loop();
+
+        // check used rid
+        bid_in_loop
+            .into_iter()
+            .flat_map(|bid| {
+                self.blocks
+                    .get(&bid)
+                    .unwrap()
+                    .walk_register()
+                    .map(|(rid, _)| rid)
+            })
+            .collect()
     }
 }
