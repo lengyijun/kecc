@@ -1057,13 +1057,13 @@ fn int_interference_graph(
         for (iid, instr) in block.instructions.iter().enumerate().rev() {
             let _ = live_set.remove(&RegisterId::Temp { bid, iid });
 
-            match instr.dtype() {
-                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                    for &a in &live_set {
-                        int_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
-                    }
+            if int_ig
+                .register_id_2_node_index
+                .contains_key(&RegisterId::Temp { bid, iid })
+            {
+                for &a in &live_set {
+                    int_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
                 }
-                _ => {}
             }
 
             for rid_1 in instr.walk_int_register().filter_map(f) {
@@ -1159,13 +1159,13 @@ fn float_interference_graph(
         for (iid, instr) in block.instructions.iter().enumerate().rev() {
             let _ = live_set.remove(&RegisterId::Temp { bid, iid });
 
-            match instr.dtype() {
-                ir::Dtype::Float { .. } => {
-                    for &a in &live_set {
-                        float_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
-                    }
+            if float_ig
+                .register_id_2_node_index
+                .contains_key(&RegisterId::Temp { bid, iid })
+            {
+                for &a in &live_set {
+                    float_ig.add_edge(a, RegisterId::Temp { bid, iid }, register_mp);
                 }
-                _ => {}
             }
 
             for rid_1 in instr.walk_float_register().filter_map(f) {
