@@ -1,3 +1,4 @@
+#![feature(let_chains)]
 //! KECC: KAIST Educational C Compiler.
 
 #![deny(clippy::all)]
@@ -34,7 +35,7 @@
 // #![deny(unreachable_pub)]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
-#![deny(unstable_features)]
+// #![deny(unstable_features)]
 // Necessary for `build-bin` trick.
 // #![deny(unused_crate_dependencies)]
 #![deny(unused_extern_crates)]
