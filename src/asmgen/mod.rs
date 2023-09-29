@@ -1347,19 +1347,25 @@ fn spills(
         {
             return;
         }
-        let k = max_cliques[0].len() - colors.len();
-        let mut hs: HashSet<NodeIndex> = HashSet::new();
+        let mut removed_nodes: HashSet<NodeIndex> = HashSet::new();
         for clique in max_cliques {
-            for node in clique.iter().take(k) {
-                if hs.insert(*node) {
-                    spill(
-                        *ig.node_index_2_register_id.get(node).unwrap(),
-                        stack_offset_2_s0,
-                        register_mp,
-                    );
-                    let Some(None) = ig.graph.remove_node(*node) else {
-                        unreachable!()
-                    };
+            let clique: Vec<NodeIndex> = clique
+                .into_iter()
+                .filter(|x| !removed_nodes.contains(x))
+                .collect();
+            if clique.len() > colors.len() {
+                let k = clique.len() - colors.len();
+                for node in clique.iter().take(k) {
+                    if removed_nodes.insert(*node) {
+                        spill(
+                            *ig.node_index_2_register_id.get(node).unwrap(),
+                            stack_offset_2_s0,
+                            register_mp,
+                        );
+                        let Some(None) = ig.graph.remove_node(*node) else {
+                            unreachable!()
+                        };
+                    }
                 }
             }
         }
