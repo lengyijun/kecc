@@ -5684,14 +5684,14 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
         .collect();
     let nodes_in_loop: HashSet<NodeIndex> = loops.iter().flatten().copied().collect();
 
-    let mut instructions: Vec<asm::Instruction> = Vec::new();
+    let mut linear: HashSet<(Register, Register, ir::Dtype)> = HashSet::new();
     for (src, target, dtype) in &v {
         match (
             nodes_in_loop.get(register_2_node_index.get(src).unwrap()),
             nodes_in_loop.get(register_2_node_index.get(target).unwrap()),
         ) {
             (None, None) | (Some(_), None) => {
-                instructions.extend(mv_register(*src, *target, dtype.clone()));
+                let true = linear.insert((*src, *target, dtype.clone())) else {unreachable!()};
             }
             (Some(_), Some(_)) => {
                 // deal with this in loop
@@ -5699,6 +5699,20 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
             (None, Some(_)) => unreachable!(),
         }
     }
+
+    let mut instructions: Vec<asm::Instruction> = Vec::new();
+
+    while !linear.is_empty() {
+        let sources: HashSet<Register> = linear.iter().map(|(src, _, _)| *src).collect();
+        let ref x @ (src, target, ref dtype) = linear
+            .iter()
+            .find(|(_, target, _)| !sources.contains(target))
+            .unwrap()
+            .clone();
+        instructions.extend(mv_register(src, target, dtype.clone()));
+        let true = linear.remove(x) else {unreachable!()};
+    }
+
     for loop_in_graph in loops {
         instructions.extend(cp_parallel_inner(
             loop_in_graph,
