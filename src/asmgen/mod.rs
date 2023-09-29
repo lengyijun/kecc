@@ -928,7 +928,7 @@ impl GraphWrapper {
         let a = *self
             .register_id_2_node_index
             .get(&a)
-            .expect(&format!("can't find {a}"));
+            .unwrap_or_else(|| panic!("can't find {a}"));
         let b = *self.register_id_2_node_index.get(&b).unwrap();
         let _ = self.graph.update_edge(a, b, ());
     }
@@ -5592,7 +5592,7 @@ fn mk_itype(instr: IType, rd: Register, rs1: Register, imm: u64) -> Vec<asm::Ins
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
                 rd: Register::T4,
-                imm: imm,
+                imm,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
@@ -5622,7 +5622,7 @@ fn mk_stype(instr: SType, rs1: Register, rs2: Register, imm: u64) -> Vec<asm::In
         vec![
             asm::Instruction::Pseudo(Pseudo::Li {
                 rd: Register::T4,
-                imm: imm,
+                imm,
             }),
             asm::Instruction::RType {
                 instr: RType::Add(DataSize::Double),
