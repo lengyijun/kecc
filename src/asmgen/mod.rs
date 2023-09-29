@@ -4037,7 +4037,12 @@ fn translate_block(
                                     rs: reg,
                                 }));
                             }
-                            (64, true) => unimplemented!(),
+                            (64, true) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: reg,
+                                }));
+                            }
                             (64, false) => unimplemented!(),
                             _ => unreachable!(),
                         }
