@@ -62,7 +62,9 @@ impl Translate<ir::TranslationUnit> for Asmgen {
 
         // init global variable first
         for (label, decl) in &source.decls {
-            let Declaration::Variable { dtype, initializer } = decl else { continue };
+            let Declaration::Variable { dtype, initializer } = decl else {
+                continue;
+            };
             let (_, align) = dtype.size_align_of(&source.structs).unwrap();
 
             let directives = initializer_2_directive(dtype.clone(), initializer.clone(), source);
@@ -91,7 +93,13 @@ impl Translate<ir::TranslationUnit> for Asmgen {
             .collect();
 
         for (func_name, decl) in source.decls.iter() {
-            let Declaration::Function{ signature, definition } = decl else { continue };
+            let Declaration::Function {
+                signature,
+                definition,
+            } = decl
+            else {
+                continue;
+            };
             asm.unit.functions.push(Section {
                 header: vec![Directive::Globl(Label(func_name.to_owned()))],
                 body: translate_function(
@@ -157,10 +165,20 @@ fn translate_function(
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(_))) => {
                 match dtype {
                     ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                        let None = register_mp.insert(register_id,  DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) else {unreachable!()};
+                        let None = register_mp.insert(
+                            register_id,
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure),
+                        ) else {
+                            unreachable!()
+                        };
                     }
                     ir::Dtype::Float { .. } => {
-                        let None = register_mp.insert(register_id,  DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) else {unreachable!()};
+                        let None = register_mp.insert(
+                            register_id,
+                            DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure),
+                        ) else {
+                            unreachable!()
+                        };
                     }
                     _ => unreachable!(),
                 }
@@ -168,20 +186,46 @@ fn translate_function(
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
-                let None = register_mp.insert(register_id, DirectOrInDirect::Direct( RegOrStack::Stack { offset_to_s0: *offset_to_s0 })) else {unreachable!()};
+                let None = register_mp.insert(
+                    register_id,
+                    DirectOrInDirect::Direct(RegOrStack::Stack {
+                        offset_to_s0: *offset_to_s0,
+                    }),
+                ) else {
+                    unreachable!()
+                };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(_))) => {
                 // must be a struct
-                let None = register_mp.insert(register_id,  DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure )) else {unreachable!()};
+                let None = register_mp.insert(
+                    register_id,
+                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure),
+                ) else {
+                    unreachable!()
+                };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
-                let None = register_mp.insert(register_id, DirectOrInDirect::InDirect(
-                    RegOrStack::Stack { offset_to_s0: *offset_to_s0 })) else {unreachable!()};
+                let None = register_mp.insert(
+                    register_id,
+                    DirectOrInDirect::InDirect(RegOrStack::Stack {
+                        offset_to_s0: *offset_to_s0,
+                    }),
+                ) else {
+                    unreachable!()
+                };
             }
             ParamAlloc::StructInRegister(v) => {
-                let ir::Dtype::Struct { name, size_align_offsets , fields, ..} = dtype else {unreachable!()};
+                let ir::Dtype::Struct {
+                    name,
+                    size_align_offsets,
+                    fields,
+                    ..
+                } = dtype
+                else {
+                    unreachable!()
+                };
                 let Some((size, align, offsets)) = (if size_align_offsets.is_some() {
                     size_align_offsets.clone()
                 } else {
@@ -190,8 +234,11 @@ fn translate_function(
                         .get(name.as_ref().unwrap())
                         .and_then(|x| x.as_ref())
                         .and_then(|x| x.get_struct_size_align_offsets())
-                        .and_then(|x| x.as_ref()).cloned()
-                } ) else {unreachable!()};
+                        .and_then(|x| x.as_ref())
+                        .cloned()
+                }) else {
+                    unreachable!()
+                };
 
                 let Some(fields) = (if fields.is_some() {
                     fields.clone()
@@ -201,8 +248,11 @@ fn translate_function(
                         .get(name.as_ref().unwrap())
                         .and_then(|x| x.as_ref())
                         .and_then(|x| x.get_struct_fields())
-                        .and_then(|x| x.as_ref()).cloned()
-                } ) else {unreachable!()};
+                        .and_then(|x| x.as_ref())
+                        .cloned()
+                }) else {
+                    unreachable!()
+                };
 
                 let align: i64 = align.max(4).try_into().unwrap();
                 while stack_offset_2_s0 % align != 0 {
@@ -235,7 +285,14 @@ fn translate_function(
                         RegisterCouple::MergedToPrevious => {}
                     }
                 }
-                let None = register_mp.insert(register_id, DirectOrInDirect::Direct( RegOrStack::Stack { offset_to_s0: stack_offset_2_s0 })) else {unreachable!()};
+                let None = register_mp.insert(
+                    register_id,
+                    DirectOrInDirect::Direct(RegOrStack::Stack {
+                        offset_to_s0: stack_offset_2_s0,
+                    }),
+                ) else {
+                    unreachable!()
+                };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure))
             | ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure))
@@ -270,7 +327,14 @@ fn translate_function(
             Register::T0,
             stack_offset_2_s0 as u64,
         ));
-        let None = register_mp.insert(RegisterId::Local { aid }, DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 : stack_offset_2_s0 } )) else {unreachable!()};
+        let None = register_mp.insert(
+            RegisterId::Local { aid },
+            DirectOrInDirect::Direct(RegOrStack::Stack {
+                offset_to_s0: stack_offset_2_s0,
+            }),
+        ) else {
+            unreachable!()
+        };
     }
 
     for (&bid, block) in definition
@@ -282,10 +346,20 @@ fn translate_function(
             match &**dtype {
                 ir::Dtype::Unit { .. } => unreachable!(),
                 ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                    let None = register_mp.insert(RegisterId::Arg { bid, aid }, DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) else {unreachable!()};
+                    let None = register_mp.insert(
+                        RegisterId::Arg { bid, aid },
+                        DirectOrInDirect::Direct(RegOrStack::IntRegNotSure),
+                    ) else {
+                        unreachable!()
+                    };
                 }
                 ir::Dtype::Float { .. } => {
-                    let None = register_mp.insert(RegisterId::Arg { bid, aid }, DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) else {unreachable!()};
+                    let None = register_mp.insert(
+                        RegisterId::Arg { bid, aid },
+                        DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure),
+                    ) else {
+                        unreachable!()
+                    };
                 }
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => {
@@ -304,10 +378,20 @@ fn translate_function(
             match &dtype {
                 ir::Dtype::Unit { .. } => {}
                 ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                    let None = register_mp.insert(RegisterId::Temp { bid , iid },DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) else {unreachable!()};
+                    let None = register_mp.insert(
+                        RegisterId::Temp { bid, iid },
+                        DirectOrInDirect::Direct(RegOrStack::IntRegNotSure),
+                    ) else {
+                        unreachable!()
+                    };
                 }
                 ir::Dtype::Float { .. } => {
-                    let None = register_mp.insert(RegisterId::Temp { bid , iid },DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) else {unreachable!()};
+                    let None = register_mp.insert(
+                        RegisterId::Temp { bid, iid },
+                        DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure),
+                    ) else {
+                        unreachable!()
+                    };
                 }
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => {
@@ -317,7 +401,14 @@ fn translate_function(
                         stack_offset_2_s0 -= 1;
                     }
                     stack_offset_2_s0 -= size.max(4) as i64;
-                    let None = register_mp.insert(RegisterId::Temp { bid , iid },DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: stack_offset_2_s0 } )) else {unreachable!()};
+                    let None = register_mp.insert(
+                        RegisterId::Temp { bid, iid },
+                        DirectOrInDirect::Direct(RegOrStack::Stack {
+                            offset_to_s0: stack_offset_2_s0,
+                        }),
+                    ) else {
+                        unreachable!()
+                    };
                 }
                 ir::Dtype::Function { .. } => unreachable!(),
                 ir::Dtype::Typedef { .. } => unreachable!(),
@@ -837,45 +928,67 @@ fn color(
     colors: &[Register],
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
-    let Some(peo) = petgraph::algo::peo::peo(&ig.graph) else {unreachable!()};
+    let Some(peo) = petgraph::algo::peo::peo(&ig.graph) else {
+        unreachable!()
+    };
     for node_index in peo.into_iter().rev() {
         let mut colors: HashSet<Register> = colors.iter().copied().collect();
         for neighbour in ig.graph.neighbors(node_index) {
             if let Some(Some(color)) = ig.graph.node_weight(neighbour) {
-                let true = colors.remove(color) else {unreachable!()};
+                let true = colors.remove(color) else {
+                    unreachable!()
+                };
             }
         }
-        let Some(x)  = ig.graph.node_weight_mut(node_index) else {unreachable!()};
+        let Some(x) = ig.graph.node_weight_mut(node_index) else {
+            unreachable!()
+        };
         *x = Some(colors.into_iter().next().unwrap());
     }
 
     for node_index in ig.graph.node_identifiers() {
         let register_id = ig.node_index_2_register_id.get(&node_index).unwrap();
-        let Some(Some(color))= ig.graph.node_weight(node_index) else {unreachable!()};
+        let Some(Some(color)) = ig.graph.node_weight(node_index) else {
+            unreachable!()
+        };
         match register_mp.get(register_id).unwrap() {
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure) => {
                 let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) = register_mp.insert(
                     *register_id,
                     DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                ) else {unreachable!()};
+                ) else {
+                    unreachable!()
+                };
             }
             DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
-                let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp.insert(
-                    *register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                ) else {unreachable!()};
+                let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp
+                    .insert(
+                        *register_id,
+                        DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
+                    )
+                else {
+                    unreachable!()
+                };
             }
             DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
-                let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp.insert(
-                    *register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                ) else {unreachable!()};
+                let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp
+                    .insert(
+                        *register_id,
+                        DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
+                    )
+                else {
+                    unreachable!()
+                };
             }
             DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
-                let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp.insert(
-                    *register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                ) else {unreachable!()};
+                let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp
+                    .insert(
+                        *register_id,
+                        DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
+                    )
+                else {
+                    unreachable!()
+                };
             }
             _ => unreachable!(),
         }
@@ -896,7 +1009,9 @@ impl GraphWrapper {
             std::collections::hash_map::Entry::Vacant(v) => {
                 let node = self.graph.add_node(None);
                 let _ = v.insert(node);
-                let None = self.node_index_2_register_id.insert(node, register_id) else {unreachable!()};
+                let None = self.node_index_2_register_id.insert(node, register_id) else {
+                    unreachable!()
+                };
             }
         }
     }
@@ -908,8 +1023,12 @@ impl GraphWrapper {
         if matches!(a, RegisterId::Local { .. }) || matches!(b, RegisterId::Local { .. }) {
             return;
         }
-        let Some(&a) = self.register_id_2_node_index.get(&a) else {return};
-        let Some(&b) = self.register_id_2_node_index.get(&b) else {return};
+        let Some(&a) = self.register_id_2_node_index.get(&a) else {
+            return;
+        };
+        let Some(&b) = self.register_id_2_node_index.get(&b) else {
+            return;
+        };
         let _ = self.graph.update_edge(a, b, ());
     }
 }
@@ -928,7 +1047,9 @@ fn int_inter_block_liveness_graph(
         for iid in 0..block.instructions.len() {
             v.push(RegisterId::Temp { bid, iid });
         }
-        let None = def.insert(bid, v) else {unreachable!()};
+        let None = def.insert(bid, v) else {
+            unreachable!()
+        };
     }
 
     let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
@@ -948,7 +1069,9 @@ fn int_inter_block_liveness_graph(
                 }
             )
             .collect();
-        let None = usee.insert(curr_bid, v) else {unreachable!()};
+        let None = usee.insert(curr_bid, v) else {
+            unreachable!()
+        };
     }
     gen_kill(&def, &usee, definition)
 }
@@ -967,14 +1090,16 @@ fn float_inter_block_liveness_graph(
         for iid in 0..block.instructions.len() {
             v.push(RegisterId::Temp { bid, iid });
         }
-        let None = def.insert(bid, v) else {unreachable!()};
+        let None = def.insert(bid, v) else {
+            unreachable!()
+        };
     }
 
     let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
     for (&curr_bid, block) in &definition.blocks {
         let v: Vec<RegisterId> = block
             .walk_register()
-            .filter_map(|(rid, _ )| 
+            .filter_map(|(rid, _ )|
                 if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid && bid == curr_bid {
                     None
                 } else {
@@ -988,7 +1113,9 @@ fn float_inter_block_liveness_graph(
 
             )
             .collect();
-        let None = usee.insert(curr_bid, v) else {unreachable!()};
+        let None = usee.insert(curr_bid, v) else {
+            unreachable!()
+        };
     }
     gen_kill(&def, &usee, definition)
 }
@@ -1135,7 +1262,16 @@ fn spills(
     loop {
         let Some(max_cliques) = petgraph::algo::peo::max_cliques(&ig.graph) else {
             dbg!(&ig.node_index_2_register_id);
-            println!("{:?}", petgraph::dot::Dot::with_config(&ig.graph, &[petgraph::dot::Config::EdgeNoLabel,petgraph::dot::Config::NodeIndexLabel]));
+            println!(
+                "{:?}",
+                petgraph::dot::Dot::with_config(
+                    &ig.graph,
+                    &[
+                        petgraph::dot::Config::EdgeNoLabel,
+                        petgraph::dot::Config::NodeIndexLabel
+                    ]
+                )
+            );
             panic!("not a chordal graph")
         };
         if max_cliques.is_empty() {
@@ -1157,7 +1293,9 @@ fn spills(
                         stack_offset_2_s0,
                         register_mp,
                     );
-                    let Some(None) = ig.graph.remove_node(*node) else {unreachable!()};
+                    let Some(None) = ig.graph.remove_node(*node) else {
+                        unreachable!()
+                    };
                 }
             }
         }
@@ -1185,7 +1323,9 @@ fn spill(
                 DirectOrInDirect::Direct(RegOrStack::Stack {
                     offset_to_s0: *stack_offset_2_s0,
                 }),
-            ) else {unreachable!()};
+            ) else {
+                unreachable!()
+            };
         }
         DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
             let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp.insert(
@@ -1193,7 +1333,9 @@ fn spill(
                 DirectOrInDirect::Direct(RegOrStack::Stack {
                     offset_to_s0: *stack_offset_2_s0,
                 }),
-            ) else {unreachable!()};
+            ) else {
+                unreachable!()
+            };
         }
         DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
             let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp.insert(
@@ -1201,7 +1343,9 @@ fn spill(
                 DirectOrInDirect::InDirect(RegOrStack::Stack {
                     offset_to_s0: *stack_offset_2_s0,
                 }),
-            ) else {unreachable!()};
+            ) else {
+                unreachable!()
+            };
         }
         DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
             let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp.insert(
@@ -1209,7 +1353,9 @@ fn spill(
                 DirectOrInDirect::InDirect(RegOrStack::Stack {
                     offset_to_s0: *stack_offset_2_s0,
                 }),
-            ) else {unreachable!()};
+            ) else {
+                unreachable!()
+            };
         }
         _ => unreachable!(),
     }
@@ -2100,7 +2246,9 @@ fn translate_block(
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
                 let c = c.clone().minus();
-                let ir::Constant::Int { value, .. } = c else {unreachable!()};
+                let ir::Constant::Int { value, .. } = c else {
+                    unreachable!()
+                };
                 let reg1 =
                     load_operand_to_reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
 
@@ -3180,7 +3328,11 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0  }) = *register_mp.get(rid).unwrap() else {unreachable!()};
+                let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
+                    *register_mp.get(rid).unwrap()
+                else {
+                    unreachable!()
+                };
                 res.extend(mk_itype(
                     IType::LD,
                     Register::T0,
@@ -3216,7 +3368,10 @@ fn translate_block(
                         dtype,
                     },
             } => {
-                let DirectOrInDirect::Direct(reg_or_stack) = register_mp.get(ptr_rid).unwrap() else {unreachable!()};
+                let DirectOrInDirect::Direct(reg_or_stack) = register_mp.get(ptr_rid).unwrap()
+                else {
+                    unreachable!()
+                };
                 let dest_location = match reg_or_stack {
                     RegOrStack::Reg(reg) => *reg,
                     RegOrStack::Stack { offset_to_s0 } => {
@@ -3312,7 +3467,9 @@ fn translate_block(
                         dtype: ir::Dtype::Pointer { inner, .. },
                     },
             } => {
-                let DirectOrInDirect::Direct(src) = register_mp.get(rid).unwrap() else {unreachable!()};
+                let DirectOrInDirect::Direct(src) = register_mp.get(rid).unwrap() else {
+                    unreachable!()
+                };
                 let source_location = match src {
                     RegOrStack::Reg(reg) => *reg,
                     RegOrStack::Stack { offset_to_s0 } => {
@@ -3453,7 +3610,9 @@ fn translate_block(
                         dtype: ir::Dtype::Pointer { inner, .. },
                         ..
                     } => {
-                        let ir::Dtype::Function { ret, params } = &**inner else {unreachable!()};
+                        let ir::Dtype::Function { ret, params } = &**inner else {
+                            unreachable!()
+                        };
                         let function_signature = FunctionSignature {
                             ret: (**ret).clone(),
                             params: params.clone(),
@@ -3614,7 +3773,12 @@ fn translate_block(
                                     },
                             },
                         ) => {
-                            let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 : base_offset}) = *register_mp.get(rid).unwrap() else {unreachable!()};
+                            let DirectOrInDirect::Direct(RegOrStack::Stack {
+                                offset_to_s0: base_offset,
+                            }) = *register_mp.get(rid).unwrap()
+                            else {
+                                unreachable!()
+                            };
 
                             let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
                                 size_align_offsets.clone()
@@ -3624,8 +3788,11 @@ fn translate_block(
                                     .get(name.as_ref().unwrap())
                                     .and_then(|x| x.as_ref())
                                     .and_then(|x| x.get_struct_size_align_offsets())
-                                    .and_then(|x| x.as_ref()).cloned()
-                            } ) else {unreachable!()};
+                                    .and_then(|x| x.as_ref())
+                                    .cloned()
+                            }) else {
+                                unreachable!()
+                            };
 
                             let Some(fields) = (if fields.is_some() {
                                 fields.clone()
@@ -3635,8 +3802,11 @@ fn translate_block(
                                     .get(name.as_ref().unwrap())
                                     .and_then(|x| x.as_ref())
                                     .and_then(|x| x.get_struct_fields())
-                                    .and_then(|x| x.as_ref()).cloned()
-                            } ) else {unreachable!()};
+                                    .and_then(|x| x.as_ref())
+                                    .cloned()
+                            }) else {
+                                unreachable!()
+                            };
 
                             for (register_couple, offset, dtype) in izip!(v, offsets, fields) {
                                 match register_couple {
@@ -3673,7 +3843,11 @@ fn translate_block(
 
                 match ret_alloc {
                     RetLocation::OnStack => {
-                        let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) = register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() else {unreachable!()} ;
+                        let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
+                            register_mp.get(&RegisterId::Temp { bid, iid }).unwrap()
+                        else {
+                            unreachable!()
+                        };
                         res.extend(mk_itype(
                             IType::Addi(DataSize::Double),
                             Register::T0,
@@ -4453,7 +4627,9 @@ fn translate_block(
             let rs1 =
                 load_operand_to_reg(value.clone(), Register::T0, &mut res, register_mp, float_mp);
             for (c, jump_arg) in cases {
-                let ir::Constant::Int { value, .. } = c else {unreachable!()};
+                let ir::Constant::Int { value, .. } = c else {
+                    unreachable!()
+                };
                 let data_size = DataSize::try_from(dtype.clone()).unwrap();
                 res.extend(mk_itype(
                     IType::Addi(data_size),
@@ -4837,8 +5013,11 @@ fn cp_from_indirect_source(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_size_align_offsets())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
             let Some(fields) = (if fields.is_some() {
                 fields.clone()
             } else {
@@ -4847,8 +5026,11 @@ fn cp_from_indirect_source(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_fields())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
 
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_from_indirect_source(
@@ -4930,8 +5112,11 @@ fn cp_to_indirect_target(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_size_align_offsets())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
             let Some(fields) = (if fields.is_some() {
                 fields.clone()
             } else {
@@ -4940,8 +5125,11 @@ fn cp_to_indirect_target(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_fields())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
 
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_to_indirect_target(
@@ -5023,8 +5211,11 @@ fn cp_from_indirect_to_indirect(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_size_align_offsets())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
             let Some(fields) = (if fields.is_some() {
                 fields.clone()
             } else {
@@ -5033,8 +5224,11 @@ fn cp_from_indirect_to_indirect(
                     .get(name.as_ref().unwrap())
                     .and_then(|x| x.as_ref())
                     .and_then(|x| x.get_struct_fields())
-                    .and_then(|x| x.as_ref()).cloned()
-            } ) else {unreachable!()};
+                    .and_then(|x| x.as_ref())
+                    .cloned()
+            }) else {
+                unreachable!()
+            };
 
             for (dtype, field_offset) in izip!(fields, offsets) {
                 cp_from_indirect_to_indirect(
@@ -5143,13 +5337,17 @@ fn initializer_2_directive(
             size_align_offsets,
             ..
         } => {
-            let Some((size, _, offsets)) = size_align_offsets else {unreachable!()};
+            let Some((size, _, offsets)) = size_align_offsets else {
+                unreachable!()
+            };
             if initializer.is_none() {
                 return vec![Directive::Zero(*size)];
             }
 
-            let Some(Initializer::List(l)) =  initializer else {unreachable!()};
-            let Some(fields) = fields else {unreachable!()};
+            let Some(Initializer::List(l)) = initializer else {
+                unreachable!()
+            };
+            let Some(fields) = fields else { unreachable!() };
 
             let mut end = 0;
             let mut v = vec![];
@@ -5289,8 +5487,11 @@ impl FunctionSignature {
                                 .get(name.as_ref().unwrap())
                                 .and_then(|x| x.as_ref())
                                 .and_then(|x| x.get_struct_size_align_offsets())
-                                .and_then(|x| x.as_ref()).cloned()
-                        } ) else {unreachable!()};
+                                .and_then(|x| x.as_ref())
+                                .cloned()
+                        }) else {
+                            unreachable!()
+                        };
 
                         let Some(fields) = (if fields.is_some() {
                             fields.clone()
@@ -5300,8 +5501,11 @@ impl FunctionSignature {
                                 .get(name.as_ref().unwrap())
                                 .and_then(|x| x.as_ref())
                                 .and_then(|x| x.get_struct_fields())
-                                .and_then(|x| x.as_ref()).cloned()
-                        } ) else {unreachable!()};
+                                .and_then(|x| x.as_ref())
+                                .cloned()
+                        }) else {
+                            unreachable!()
+                        };
 
                         let mut j = 0;
                         let mut x: Vec<RegisterCouple> =
@@ -5580,8 +5784,12 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
 
     for register in registers {
         let node_index = graph.add_node(());
-        let None = register_2_node_index.insert(register, node_index) else {unreachable!()};
-        let None = node_index_2_register.insert(node_index, register) else {unreachable!()};
+        let None = register_2_node_index.insert(register, node_index) else {
+            unreachable!()
+        };
+        let None = node_index_2_register.insert(node_index, register) else {
+            unreachable!()
+        };
     }
 
     let mut edges = Vec::new();
@@ -5607,7 +5815,9 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
             nodes_in_loop.get(register_2_node_index.get(target).unwrap()),
         ) {
             (None, None) | (Some(_), None) => {
-                let true = linear.insert((*src, *target, dtype.clone())) else {unreachable!()};
+                let true = linear.insert((*src, *target, dtype.clone())) else {
+                    unreachable!()
+                };
             }
             (Some(_), Some(_)) => {
                 // deal with this in loop
@@ -5626,7 +5836,9 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
             .unwrap()
             .clone();
         instructions.extend(mv_register(src, target, dtype.clone()));
-        let true = linear.remove(x) else {unreachable!()};
+        let true = linear.remove(x) else {
+            unreachable!()
+        };
     }
 
     for loop_in_graph in loops {
@@ -5653,7 +5865,9 @@ fn cp_parallel_inner(
     let loop_in_graph = order_loop(loop_in_graph, graph);
 
     let get_dtype = |src: NodeIndex, dest: NodeIndex| {
-        let Some(e) = graph.find_edge(src, dest) else {unreachable!()};
+        let Some(e) = graph.find_edge(src, dest) else {
+            unreachable!()
+        };
         graph.edge_weight(e).unwrap()
     };
 
@@ -5689,7 +5903,9 @@ fn cp_parallel_inner(
 fn order_loop(loop_in_graph: Vec<NodeIndex>, graph: &StableGraph<(), ir::Dtype>) -> Vec<NodeIndex> {
     let mut nodes_in_loop: HashSet<NodeIndex> = loop_in_graph.iter().copied().collect();
     let mut ordered_loop: Vec<NodeIndex> = vec![loop_in_graph[0]];
-    let true = nodes_in_loop.remove(&loop_in_graph[0]) else {unreachable!()};
+    let true = nodes_in_loop.remove(&loop_in_graph[0]) else {
+        unreachable!()
+    };
 
     for _ in 0..loop_in_graph.len() - 1 {
         let src = *ordered_loop.last().unwrap();
@@ -5699,7 +5915,9 @@ fn order_loop(loop_in_graph: Vec<NodeIndex>, graph: &StableGraph<(), ir::Dtype>)
         let dest: NodeIndex = iter.next().unwrap();
         assert!(iter.next().is_none());
         ordered_loop.push(dest);
-        let true = nodes_in_loop.remove(&dest) else {unreachable!()};
+        let true = nodes_in_loop.remove(&dest) else {
+            unreachable!()
+        };
     }
 
     ordered_loop
