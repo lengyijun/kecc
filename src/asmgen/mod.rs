@@ -296,14 +296,16 @@ fn translate_function(
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure))
             | ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure))
+            | ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::LocalNotSure))
             | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure))
-            | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) => {
+            | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure))
+            | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::LocalNotSure)) => {
                 unreachable!()
             }
         }
     }
 
-    let mut init_allocation = vec![];
+    let mut local_offset_v: Vec<i64> = vec![0; definition.allocations.len()];
     for (aid, dtype) in definition.allocations.iter().enumerate() {
         let (size, align) = dtype.size_align_of(&source.structs).unwrap();
         let align: i64 = align.max(4).try_into().unwrap();
@@ -311,27 +313,11 @@ fn translate_function(
             stack_offset_2_s0 -= 1;
         }
         stack_offset_2_s0 -= <usize as TryInto<i64>>::try_into(size.max(4)).unwrap();
-        init_allocation.extend(mk_itype(
-            IType::Addi(DataSize::Double),
-            Register::T0,
-            Register::S0,
-            stack_offset_2_s0 as u64,
-        ));
-        while stack_offset_2_s0 % 8 != 0 {
-            stack_offset_2_s0 -= 1;
-        }
-        stack_offset_2_s0 -= 8;
-        init_allocation.extend(mk_stype(
-            SType::SD,
-            Register::S0,
-            Register::T0,
-            stack_offset_2_s0 as u64,
-        ));
+
+        local_offset_v[aid] = stack_offset_2_s0;
         let None = register_mp.insert(
             RegisterId::Local { aid },
-            DirectOrInDirect::Direct(RegOrStack::Stack {
-                offset_to_s0: stack_offset_2_s0,
-            }),
+            DirectOrInDirect::Direct(RegOrStack::LocalNotSure),
         ) else {
             unreachable!()
         };
@@ -420,13 +406,54 @@ fn translate_function(
     // we need to allocate register first
     alloc_register(definition, &mut register_mp, &mut stack_offset_2_s0);
 
+    let mut init_allocation = vec![];
+    for (aid, offset) in local_offset_v.into_iter().enumerate() {
+        match register_mp.get(&RegisterId::Local { aid }).unwrap() {
+            DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+                init_allocation.extend(mk_itype(
+                    IType::Addi(DataSize::Double),
+                    Register::T0,
+                    Register::S0,
+                    offset as u64,
+                ));
+                while stack_offset_2_s0 % 8 != 0 {
+                    stack_offset_2_s0 -= 1;
+                }
+                stack_offset_2_s0 -= 8;
+                init_allocation.extend(mk_stype(
+                    SType::SD,
+                    Register::S0,
+                    Register::T0,
+                    stack_offset_2_s0 as u64,
+                ));
+                // TODO: fix later
+                let _x = register_mp.insert(
+                    RegisterId::Local { aid },
+                    DirectOrInDirect::Direct(RegOrStack::Stack {
+                        offset_to_s0: stack_offset_2_s0,
+                    }),
+                );
+            }
+            DirectOrInDirect::Direct(RegOrStack::Reg(reg)) => {
+                init_allocation.extend(mk_itype(
+                    IType::Addi(DataSize::Double),
+                    *reg,
+                    Register::S0,
+                    offset as u64,
+                ));
+            }
+            _ => unreachable!(),
+        }
+    }
+
     #[allow(clippy::all)]
     for (_, v) in &register_mp {
         match v {
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
             | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
             | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)
-            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => unreachable!(),
+            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)
+            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
             _ => {}
         }
     }
@@ -990,6 +1017,14 @@ fn color(
                     unreachable!()
                 };
             }
+            DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+                let Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure)) = register_mp.insert(
+                    *register_id,
+                    DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
+                ) else {
+                    unreachable!()
+                };
+            }
             _ => unreachable!(),
         }
     }
@@ -1018,9 +1053,6 @@ impl GraphWrapper {
 
     fn add_edge(&mut self, a: RegisterId, b: RegisterId) {
         if a == b {
-            return;
-        }
-        if matches!(a, RegisterId::Local { .. }) || matches!(b, RegisterId::Local { .. }) {
             return;
         }
         let Some(&a) = self.register_id_2_node_index.get(&a) else {
@@ -1063,6 +1095,7 @@ fn int_inter_block_liveness_graph(
                     match register_mp.get(&rid){
                         Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure))
                         | Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure))
+                        | Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure))
                          => Some(rid),
                         _=> None,
                     }
@@ -1128,10 +1161,39 @@ fn int_interference_graph(
     for (rid, v) in register_mp {
         match v {
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
+            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)
+            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                 int_ig.add_node(*rid);
             }
             _ => {}
+        }
+    }
+
+    for aid_1 in 0..definition.allocations.len() {
+        for aid_2 in 0..definition.allocations.len() {
+            int_ig.add_edge(
+                RegisterId::Local { aid: aid_1 },
+                RegisterId::Local { aid: aid_2 },
+            );
+        }
+    }
+
+    for aid in 0..definition.allocations.len() {
+        for (x, _) in definition
+            .blocks
+            .get(&definition.bid_init)
+            .unwrap()
+            .phinodes
+            .iter()
+            .enumerate()
+        {
+            int_ig.add_edge(
+                RegisterId::Local { aid },
+                RegisterId::Arg {
+                    bid: definition.bid_init,
+                    aid: x,
+                },
+            );
         }
     }
 
@@ -1309,15 +1371,18 @@ fn spill(
     stack_offset_2_s0: &mut i64,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
-    let align: i64 = 8;
-    let size: i64 = 8;
-    while *stack_offset_2_s0 % align != 0 {
-        *stack_offset_2_s0 -= 1;
-    }
-    *stack_offset_2_s0 -= size;
+    let mut allocate_on_stack = || {
+        let align: i64 = 8;
+        let size: i64 = 8;
+        while *stack_offset_2_s0 % align != 0 {
+            *stack_offset_2_s0 -= 1;
+        }
+        *stack_offset_2_s0 -= size;
+    };
 
     match register_mp.get(&register_id).unwrap() {
         DirectOrInDirect::Direct(RegOrStack::IntRegNotSure) => {
+            allocate_on_stack();
             let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) = register_mp.insert(
                 register_id,
                 DirectOrInDirect::Direct(RegOrStack::Stack {
@@ -1328,6 +1393,7 @@ fn spill(
             };
         }
         DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+            allocate_on_stack();
             let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp.insert(
                 register_id,
                 DirectOrInDirect::Direct(RegOrStack::Stack {
@@ -1338,6 +1404,7 @@ fn spill(
             };
         }
         DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
+            allocate_on_stack();
             let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp.insert(
                 register_id,
                 DirectOrInDirect::InDirect(RegOrStack::Stack {
@@ -1348,6 +1415,7 @@ fn spill(
             };
         }
         DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
+            allocate_on_stack();
             let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp.insert(
                 register_id,
                 DirectOrInDirect::InDirect(RegOrStack::Stack {
@@ -1356,6 +1424,9 @@ fn spill(
             ) else {
                 unreachable!()
             };
+        }
+        DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+            // don't update register_mp
         }
         _ => unreachable!(),
     }
@@ -1415,7 +1486,8 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1451,7 +1523,8 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1496,7 +1569,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1534,7 +1608,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1571,7 +1646,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1604,7 +1680,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1638,7 +1715,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1757,7 +1835,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1802,7 +1881,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1841,7 +1921,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1890,7 +1971,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1952,7 +2034,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1991,7 +2074,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2040,7 +2124,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2080,7 +2165,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2129,7 +2215,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2169,7 +2256,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2218,7 +2306,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2286,7 +2375,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3059,7 +3149,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3116,7 +3207,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3164,7 +3256,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3204,7 +3297,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3244,7 +3338,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3284,7 +3379,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3315,9 +3411,9 @@ fn translate_block(
             }
             ir::Instruction::Store {
                 ptr:
-                    ir::Operand::Register {
-                        rid,
+                    ptr @ ir::Operand::Register {
                         dtype: ir::Dtype::Pointer { inner, .. },
+                        ..
                     },
                 value: operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
             } => {
@@ -3328,20 +3424,11 @@ fn translate_block(
                     register_mp,
                     float_mp,
                 );
-                let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
-                    *register_mp.get(rid).unwrap()
-                else {
-                    unreachable!()
-                };
-                res.extend(mk_itype(
-                    IType::LD,
-                    Register::T0,
-                    Register::S0,
-                    offset_to_s0 as u64,
-                ));
+                let rs1 =
+                    load_operand_to_reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
-                    rs1: Register::T0,
+                    rs1,
                     rs2: reg0,
                     imm: Immediate::Value(0),
                 });
@@ -3383,7 +3470,9 @@ fn translate_block(
                         ));
                         Register::T3
                     }
-                    RegOrStack::IntRegNotSure | RegOrStack::FloatRegNotSure => unreachable!(),
+                    RegOrStack::IntRegNotSure
+                    | RegOrStack::FloatRegNotSure
+                    | RegOrStack::LocalNotSure => unreachable!(),
                 };
                 match register_mp.get(value_rid).unwrap() {
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: src }) => {
@@ -3406,7 +3495,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(src) => {
                         let source_location = match src {
                             RegOrStack::Reg(reg) => *reg,
@@ -3419,7 +3509,9 @@ fn translate_block(
                                 ));
                                 Register::T2
                             }
-                            RegOrStack::IntRegNotSure | RegOrStack::FloatRegNotSure => {
+                            RegOrStack::IntRegNotSure
+                            | RegOrStack::FloatRegNotSure
+                            | RegOrStack::LocalNotSure => {
                                 unreachable!()
                             }
                         };
@@ -3481,7 +3573,9 @@ fn translate_block(
                         ));
                         Register::T2
                     }
-                    RegOrStack::IntRegNotSure | RegOrStack::FloatRegNotSure => unreachable!(),
+                    RegOrStack::IntRegNotSure
+                    | RegOrStack::FloatRegNotSure
+                    | RegOrStack::LocalNotSure => unreachable!(),
                 };
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3504,7 +3598,8 @@ fn translate_block(
                         );
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3546,7 +3641,8 @@ fn translate_block(
                     ));
                 }
                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                 DirectOrInDirect::InDirect(_) => unreachable!(),
             },
             ir::Instruction::Load {
@@ -3584,7 +3680,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -3702,7 +3799,9 @@ fn translate_block(
                                 }));
                             }
                             DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)
-                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
+                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::InDirect(RegOrStack::LocalNotSure)
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                 unreachable!()
                             }
                         },
@@ -3755,8 +3854,10 @@ fn translate_block(
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
                             | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure)
                             | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)
-                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
+                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::InDirect(RegOrStack::LocalNotSure) => {
                                 unreachable!()
                             }
                         },
@@ -3884,7 +3985,8 @@ fn translate_block(
                                 Register::T0
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3914,7 +4016,8 @@ fn translate_block(
                                     ));
                                 }
                                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                                | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                     unreachable!()
                                 }
                                 DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3938,7 +4041,8 @@ fn translate_block(
                                     ));
                                 }
                                 DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                                | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
                                     unreachable!()
                                 }
                                 DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -4575,7 +4679,8 @@ fn translate_block(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -4756,7 +4861,8 @@ fn gen_jump_arg(
                         ));
                     }
                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+                    | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
                     DirectOrInDirect::InDirect(_) => todo!(),
                 },
             },
@@ -4770,7 +4876,8 @@ fn gen_jump_arg(
                 );
             }
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
             DirectOrInDirect::InDirect(_) => unreachable!(),
         };
     }
@@ -4876,7 +4983,8 @@ fn load_operand_to_reg(
                 or_register
             }
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => unreachable!(),
+            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)
+            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => unreachable!(),
             DirectOrInDirect::InDirect(_) => unreachable!(),
         },
         _ => unreachable!("{:?}", operand),
@@ -5384,6 +5492,7 @@ enum RegOrStack {
     /// to be allocated
     IntRegNotSure,
     FloatRegNotSure,
+    LocalNotSure,
     Reg(Register),
     Stack {
         offset_to_s0: i64,
