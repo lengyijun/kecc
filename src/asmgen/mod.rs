@@ -1321,9 +1321,10 @@ fn spills(
     stack_offset_2_s0: &mut i64,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
-    // TODO: find all clique larger than threhold ?
     loop {
-        let Some(max_cliques) = petgraph::algo::peo::max_cliques(&ig.graph) else {
+        let Some(max_cliques) =
+            petgraph::algo::peo::cliques_larger_than_threshold(&ig.graph, colors.len())
+        else {
             dbg!(&ig.node_index_2_register_id);
             println!(
                 "{:?}",
