@@ -1010,8 +1010,8 @@ impl<T: fmt::Display> fmt::Display for Named<T> {
 }
 
 impl<T: Ord> PartialOrd for Named<T> {
-    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-        unreachable!()
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
