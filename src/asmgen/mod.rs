@@ -8,15 +8,16 @@ use crate::ir::{
     self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
 };
 use crate::Translate;
-use itertools::izip;
+use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use ordered_float::OrderedFloat;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::IntoNodeIdentifiers;
 use std::collections::{HashMap, HashSet};
+use std::iter::once;
 
-static INT_REGISTERS: [Register; 11] = [
+static INT_REGISTERS: [Register; 21] = [
     Register::S1,
     Register::S2,
     Register::S3,
@@ -28,9 +29,19 @@ static INT_REGISTERS: [Register; 11] = [
     Register::S9,
     Register::S10,
     Register::S11,
+    Register::T5,
+    Register::T6,
+    Register::A0,
+    Register::A1,
+    Register::A2,
+    Register::A3,
+    Register::A4,
+    Register::A5,
+    Register::A6,
+    Register::A7,
 ];
 
-static FLOAT_REGISTERS: [Register; 12] = [
+static FLOAT_REGISTERS: [Register; 26] = [
     Register::FS0,
     Register::FS1,
     Register::FS2,
@@ -43,6 +54,20 @@ static FLOAT_REGISTERS: [Register; 12] = [
     Register::FS9,
     Register::FS10,
     Register::FS11,
+    Register::FT2,
+    Register::FT3,
+    Register::FT4,
+    Register::FT5,
+    Register::FT6,
+    Register::FT7,
+    Register::FA0,
+    Register::FA1,
+    Register::FA2,
+    Register::FA3,
+    Register::FA4,
+    Register::FA5,
+    Register::FA6,
+    Register::FA7,
 ];
 
 #[derive(Default, Clone, Copy, Debug)]
@@ -970,22 +995,28 @@ fn color(
         unreachable!()
     };
     for node_index in peo.into_iter().rev() {
+        if matches!(ig.graph.node_weight(node_index), Some(Some(_color))) {
+            // already colored
+            continue;
+        }
         let mut colors: HashSet<Register> = colors.iter().copied().collect();
         for neighbour in ig.graph.neighbors(node_index) {
             if let Some(Some(color)) = ig.graph.node_weight(neighbour) {
-                let true = colors.remove(color) else {
-                    unreachable!()
-                };
+                let _ = colors.remove(color);
             }
         }
         let Some(x) = ig.graph.node_weight_mut(node_index) else {
             unreachable!()
         };
+        assert_eq!(*x, None);
         *x = Some(colors.into_iter().next().unwrap());
     }
 
     for node_index in ig.graph.node_identifiers() {
-        let register_id = ig.node_index_2_register_id.get(&node_index).unwrap();
+        let Some(register_id) = ig.node_index_2_register_id.get(&node_index) else {
+            // precolored
+            continue;
+        };
         let Some(Some(color)) = ig.graph.node_weight(node_index) else {
             unreachable!()
         };
@@ -1179,6 +1210,24 @@ fn int_interference_graph(
             _ => {}
         }
     }
+    let caller_saved_register = [
+        int_ig.graph.add_node(Some(Register::T5)),
+        int_ig.graph.add_node(Some(Register::T6)),
+        int_ig.graph.add_node(Some(Register::A0)),
+        int_ig.graph.add_node(Some(Register::A1)),
+        int_ig.graph.add_node(Some(Register::A2)),
+        int_ig.graph.add_node(Some(Register::A3)),
+        int_ig.graph.add_node(Some(Register::A4)),
+        int_ig.graph.add_node(Some(Register::A5)),
+        int_ig.graph.add_node(Some(Register::A6)),
+        int_ig.graph.add_node(Some(Register::A7)),
+    ];
+
+    for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
+        if a != b {
+            let _ = int_ig.graph.add_edge(a, b, ());
+        }
+    }
 
     for aid_1 in 0..definition.allocations.len() {
         for aid_2 in 0..definition.allocations.len() {
@@ -1224,6 +1273,25 @@ fn int_interference_graph(
                 int_ig.add_edge(a, RegisterId::Temp { bid, iid });
             }
 
+            if let ir::Instruction::Call { callee, .. } = &**instr {
+                // live set conflict with caller_saved_register
+                // callee conflict with caller_saved_register
+                for a in live_set
+                    .iter()
+                    .chain(once(callee).filter_map(|operand| match operand {
+                        ir::Operand::Constant(_) => None,
+                        ir::Operand::Register { rid, .. } => Some(rid),
+                    }))
+                {
+                    let Some(&a) = int_ig.register_id_2_node_index.get(a) else {
+                        continue;
+                    };
+                    for &b in &caller_saved_register {
+                        let _ = int_ig.graph.add_edge(a, b, ());
+                    }
+                }
+            }
+
             for (rid, _) in instr.walk_register() {
                 let _ = live_set.insert(rid);
             }
@@ -1233,8 +1301,6 @@ fn int_interference_graph(
                     int_ig.add_edge(a, rid_1);
                 }
             }
-
-            // TODO: check Call T5 T6 ...
         }
 
         for (aid, _) in block.phinodes.iter().enumerate() {
@@ -1266,6 +1332,28 @@ fn float_interference_graph(
             _ => {}
         }
     }
+    let caller_saved_register = [
+        float_ig.graph.add_node(Some(Register::FT2)),
+        float_ig.graph.add_node(Some(Register::FT3)),
+        float_ig.graph.add_node(Some(Register::FT4)),
+        float_ig.graph.add_node(Some(Register::FT5)),
+        float_ig.graph.add_node(Some(Register::FT6)),
+        float_ig.graph.add_node(Some(Register::FT7)),
+        float_ig.graph.add_node(Some(Register::FA0)),
+        float_ig.graph.add_node(Some(Register::FA1)),
+        float_ig.graph.add_node(Some(Register::FA2)),
+        float_ig.graph.add_node(Some(Register::FA3)),
+        float_ig.graph.add_node(Some(Register::FA4)),
+        float_ig.graph.add_node(Some(Register::FA5)),
+        float_ig.graph.add_node(Some(Register::FA6)),
+        float_ig.graph.add_node(Some(Register::FA7)),
+    ];
+
+    for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
+        if a != b {
+            let _ = float_ig.graph.add_edge(a, b, ());
+        }
+    }
 
     let liveness_sets = float_inter_block_liveness_graph(definition, register_mp).out;
 
@@ -1288,6 +1376,25 @@ fn float_interference_graph(
 
             for &a in &live_set {
                 float_ig.add_edge(a, RegisterId::Temp { bid, iid });
+            }
+
+            if let ir::Instruction::Call { callee, .. } = &**instr {
+                // live set conflict with caller_saved_register
+                // callee conflict with caller_saved_register
+                for a in live_set
+                    .iter()
+                    .chain(once(callee).filter_map(|operand| match operand {
+                        ir::Operand::Constant(_) => None,
+                        ir::Operand::Register { rid, .. } => Some(rid),
+                    }))
+                {
+                    let Some(&a) = float_ig.register_id_2_node_index.get(a) else {
+                        continue;
+                    };
+                    for &b in &caller_saved_register {
+                        let _ = float_ig.graph.add_edge(a, b, ());
+                    }
+                }
             }
 
             for (rid, _) in instr.walk_register() {
@@ -1325,56 +1432,59 @@ fn spills(
     reserved_rids: &HashSet<RegisterId>,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
-    loop {
-        let Some(max_cliques) =
-            petgraph::algo::peo::cliques_larger_than_threshold(&ig.graph, colors.len())
-        else {
-            dbg!(&ig.node_index_2_register_id);
-            println!(
-                "{:?}",
-                petgraph::dot::Dot::with_config(
-                    &ig.graph,
-                    &[
-                        petgraph::dot::Config::EdgeNoLabel,
-                        petgraph::dot::Config::NodeIndexLabel
-                    ]
-                )
-            );
-            panic!("not a chordal graph")
-        };
-        if max_cliques.is_empty() {
-            return;
-        }
-        if max_cliques
-            .iter()
-            .all(|clique| clique.len() <= colors.len())
-        {
-            return;
-        }
-        let mut removed_nodes: HashSet<NodeIndex> = HashSet::new();
-        for clique in max_cliques {
-            let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = clique
-                .into_iter()
-                .filter(|x| !removed_nodes.contains(x))
-                .partition(|node_index| {
-                    reserved_rids.contains(ig.node_index_2_register_id.get(node_index).unwrap())
-                });
-            if reserved_node_index.len() + to_be_spilled.len() > colors.len() {
-                let count = reserved_node_index.len() + to_be_spilled.len() - colors.len();
-                for node in to_be_spilled
-                    .iter()
-                    .chain(reserved_node_index.iter())
-                    .take(count)
-                {
-                    if removed_nodes.insert(*node) {
+    let Some(max_cliques) =
+        petgraph::algo::peo::cliques_larger_than_threshold(&ig.graph, colors.len())
+    else {
+        dbg!(&ig.node_index_2_register_id);
+        println!(
+            "{:?}",
+            petgraph::dot::Dot::with_config(
+                &ig.graph,
+                &[
+                    petgraph::dot::Config::EdgeNoLabel,
+                    petgraph::dot::Config::NodeIndexLabel
+                ]
+            )
+        );
+        panic!("not a chordal graph")
+    };
+    if max_cliques.is_empty() {
+        return;
+    }
+    if max_cliques
+        .iter()
+        .all(|clique| clique.len() <= colors.len())
+    {
+        return;
+    }
+    for clique in max_cliques {
+        let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = clique
+            .into_iter()
+            .filter(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)))
+            .partition(|node_index| {
+                reserved_rids.contains(ig.node_index_2_register_id.get(node_index).unwrap())
+            });
+        if reserved_node_index.len() + to_be_spilled.len() > colors.len() {
+            let count = reserved_node_index.len() + to_be_spilled.len() - colors.len();
+            for node in to_be_spilled
+                .iter()
+                .chain(reserved_node_index.iter())
+                .take(count)
+            {
+                match ig.graph.remove_node(*node) {
+                    Some(Some(_color)) => {
+                        // never remove precolored node
+                        unreachable!()
+                    }
+                    Some(None) => {
                         spill(
                             *ig.node_index_2_register_id.get(node).unwrap(),
                             stack_offset_2_s0,
                             register_mp,
                         );
-                        let Some(None) = ig.graph.remove_node(*node) else {
-                            unreachable!()
-                        };
+                    }
+                    None => {
+                        // already removed
                     }
                 }
             }
@@ -3744,22 +3854,47 @@ fn translate_block(
                         (-(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap())) as u64,
                     ));
                 }
+
+                let mut to_be_cp_parallel: Vec<(Register, Register, ir::Dtype)> = Vec::new();
+                let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
+
                 for (operand, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
                     match (alloc, operand) {
                         (
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
-                                reg,
+                                target_reg,
                             ))),
-                            _,
+                            ir::Operand::Constant(_),
                         ) => {
                             store_operand_to_reg(
                                 operand.clone(),
-                                reg,
-                                &mut res,
+                                target_reg,
+                                &mut after_cp_parallel,
                                 register_mp,
                                 float_mp,
                             );
                         }
+                        (
+                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
+                                target_reg,
+                            ))),
+                            ir::Operand::Register { rid, dtype },
+                        ) => match foo(register_mp.get(rid).unwrap()) {
+                            None => {
+                                store_operand_to_reg(
+                                    operand.clone(),
+                                    target_reg,
+                                    &mut after_cp_parallel,
+                                    register_mp,
+                                    float_mp,
+                                );
+                            }
+                            Some(src_reg) => {
+                                if src_reg != target_reg {
+                                    to_be_cp_parallel.push((src_reg, target_reg, dtype.clone()))
+                                }
+                            }
+                        },
                         (
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                                 RegOrStack::Stack { offset_to_s0 },
@@ -3770,7 +3905,7 @@ fn translate_block(
                             operand_to_stack(
                                 operand.clone(),
                                 (Register::Sp, offset_to_s0 as u64),
-                                &mut res,
+                                &mut after_cp_parallel,
                                 register_mp,
                                 float_mp,
                             );
@@ -3790,7 +3925,7 @@ fn translate_block(
                             ir::Operand::Register { rid, .. },
                         ) => match register_mp.get(rid).unwrap() {
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_itype(
+                                after_cp_parallel.extend(mk_itype(
                                     IType::Addi(DataSize::Double),
                                     target_reg,
                                     Register::S0,
@@ -3803,18 +3938,17 @@ fn translate_block(
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_itype(
+                                after_cp_parallel.extend(mk_itype(
                                     IType::LD,
                                     target_reg,
                                     Register::S0,
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: target_reg,
-                                    rs: *reg,
-                                }));
+                            DirectOrInDirect::InDirect(RegOrStack::Reg(src_reg)) => {
+                                if *src_reg != target_reg {
+                                    to_be_cp_parallel.push((*src_reg, target_reg, dtype.clone()));
+                                }
                             }
                             DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)
                             | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)
@@ -3832,13 +3966,13 @@ fn translate_block(
                             ir::Operand::Register { rid, .. },
                         ) => match register_mp.get(rid).unwrap() {
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_itype(
+                                after_cp_parallel.extend(mk_itype(
                                     IType::Addi(DataSize::Double),
                                     Register::T0,
                                     Register::S0,
                                     *offset_to_s0 as u64,
                                 ));
-                                res.extend(mk_stype(
+                                after_cp_parallel.extend(mk_stype(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     Register::T0,
@@ -3849,13 +3983,13 @@ fn translate_block(
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_itype(
+                                after_cp_parallel.extend(mk_itype(
                                     IType::LD,
                                     Register::T0,
                                     Register::S0,
                                     *offset_to_s0 as u64,
                                 ));
-                                res.extend(mk_stype(
+                                after_cp_parallel.extend(mk_stype(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     Register::T0,
@@ -3863,7 +3997,7 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
-                                res.extend(mk_stype(
+                                after_cp_parallel.extend(mk_stype(
                                     SType::Store(DataSize::Double),
                                     Register::Sp,
                                     *reg,
@@ -3930,7 +4064,7 @@ fn translate_block(
                             for (register_couple, offset, dtype) in izip!(v, offsets, fields) {
                                 match register_couple {
                                     RegisterCouple::Single(register) => {
-                                        res.extend(mk_itype(
+                                        after_cp_parallel.extend(mk_itype(
                                             IType::load((*dtype).clone()),
                                             register,
                                             Register::S0,
@@ -3941,7 +4075,7 @@ fn translate_block(
                                         ));
                                     }
                                     RegisterCouple::Double(register) => {
-                                        res.extend(mk_itype(
+                                        after_cp_parallel.extend(mk_itype(
                                             IType::LD,
                                             register,
                                             Register::S0,
@@ -3959,6 +4093,9 @@ fn translate_block(
                         _ => unreachable!(),
                     }
                 }
+
+                res.extend(cp_parallel(to_be_cp_parallel));
+                res.extend(after_cp_parallel);
 
                 match ret_alloc {
                     RetLocation::OnStack => {
@@ -5956,10 +6093,9 @@ fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction>
     let mut instructions: Vec<asm::Instruction> = Vec::new();
 
     while !linear.is_empty() {
-        let sources: HashSet<Register> = linear.iter().map(|(src, _, _)| *src).collect();
         let ref x @ (src, target, ref dtype) = linear
             .iter()
-            .find(|(_, target, _)| !sources.contains(target))
+            .find(|(_, target, _)| !linear.iter().any(|(src, _, _)| src == target))
             .unwrap()
             .clone();
         instructions.extend(mv_register(src, target, dtype.clone()));
@@ -6258,5 +6394,15 @@ impl FunctionDefinition {
                     .map(|(rid, _)| rid)
             })
             .collect()
+    }
+}
+
+fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
+    match x {
+        DirectOrInDirect::Direct(RegOrStack::Reg(reg))
+        | DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => Some(*reg),
+        DirectOrInDirect::Direct(RegOrStack::Stack { .. })
+        | DirectOrInDirect::InDirect(RegOrStack::Stack { .. }) => None,
+        _ => unreachable!(),
     }
 }
