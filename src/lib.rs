@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(linked_list_cursors)]
 //! KECC: KAIST Educational C Compiler.
 
 #![deny(clippy::all)]

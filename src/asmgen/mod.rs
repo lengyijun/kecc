@@ -14,7 +14,7 @@ use ordered_float::OrderedFloat;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::IntoNodeIdentifiers;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 
 static INT_REGISTERS: [Register; 21] = [
@@ -989,14 +989,13 @@ fn alloc_register(
 }
 
 fn color(ig: &mut GraphWrapper, colors: &[Register]) {
-    let Some(peo) = petgraph::algo::peo::peo(&ig.graph) else {
-        unreachable!()
-    };
     let mut used_color: HashSet<Register> = HashSet::new();
-    for node_index in peo.into_iter().rev() {
+    for node_index in lbfs(&ig.graph).into_iter() {
         if let Some(Some(color)) = ig.graph.node_weight(node_index) {
             // already colored
-            let _ = used_color.insert(*color);
+            let true = used_color.insert(*color) else {
+                unreachable!()
+            };
             continue;
         }
         let conflict_colors: HashSet<Register> = ig
@@ -6434,4 +6433,52 @@ fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
         | DirectOrInDirect::InDirect(RegOrStack::Stack { .. }) => None,
         _ => unreachable!(),
     }
+}
+
+// a modified lbfs: precolored node first
+// output of lbfs = reverse of peo
+pub fn lbfs(graph: &StableGraph<Option<Register>, (), petgraph::Undirected>) -> Vec<NodeIndex> {
+    let mut res: Vec<NodeIndex> = Vec::new();
+
+    let mut l: LinkedList<Vec<NodeIndex>> = LinkedList::from([graph.node_identifiers().collect()]);
+
+    for _ in 0..graph.node_identifiers().count() {
+        let v = l.front_mut().unwrap();
+
+        // precolored node first
+        let pivot = match v
+            .iter()
+            .filter(|n| matches!(graph.node_weight(**n), Some(Some(_))))
+            .next()
+        {
+            Some(&x) => {
+                v.retain(|y| *y != x);
+                x
+            }
+            None => v.pop().unwrap(),
+        };
+        res.push(pivot);
+
+        if v.is_empty() {
+            let Some(_) = l.pop_front() else {
+                unreachable!()
+            };
+        }
+
+        let mut cursor = l.cursor_front_mut();
+        let neighbour: HashSet<NodeIndex> = graph.neighbors(pivot).collect();
+
+        while let Some(x) = cursor.current() {
+            let (a, b): (Vec<_>, Vec<_>) = x.iter().partition(|&y| neighbour.contains(y));
+            if a.is_empty() || b.is_empty() {
+            } else {
+                *x = b;
+                cursor.insert_before(a);
+            }
+            cursor.move_next();
+        }
+    }
+    assert!(l.is_empty());
+
+    res
 }
