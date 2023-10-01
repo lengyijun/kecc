@@ -973,7 +973,8 @@ fn alloc_register(
         &reserved_rids,
         register_mp,
     );
-    color(int_ig, &INT_REGISTERS, register_mp);
+    color(&mut int_ig, &INT_REGISTERS);
+    int_ig.dump_register_mp(register_mp);
 
     let mut float_ig = float_interference_graph(definition, register_mp);
     spills(
@@ -983,14 +984,11 @@ fn alloc_register(
         &reserved_rids,
         register_mp,
     );
-    color(float_ig, &FLOAT_REGISTERS, register_mp);
+    color(&mut float_ig, &FLOAT_REGISTERS);
+    float_ig.dump_register_mp(register_mp);
 }
 
-fn color(
-    mut ig: GraphWrapper,
-    colors: &[Register],
-    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) {
+fn color(ig: &mut GraphWrapper, colors: &[Register]) {
     let Some(peo) = petgraph::algo::peo::peo(&ig.graph) else {
         unreachable!()
     };
@@ -1010,65 +1008,6 @@ fn color(
         };
         assert_eq!(*x, None);
         *x = Some(colors.into_iter().next().unwrap());
-    }
-
-    for node_index in ig.graph.node_identifiers() {
-        let Some(register_id) = ig.node_index_2_register_id.get(&node_index) else {
-            // precolored
-            continue;
-        };
-        let Some(Some(color)) = ig.graph.node_weight(node_index) else {
-            unreachable!()
-        };
-        match register_mp.get(register_id).unwrap() {
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure) => {
-                let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) = register_mp.insert(
-                    *register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                ) else {
-                    unreachable!()
-                };
-            }
-            DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
-                let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp
-                    .insert(
-                        *register_id,
-                        DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                    )
-                else {
-                    unreachable!()
-                };
-            }
-            DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
-                let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp
-                    .insert(
-                        *register_id,
-                        DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                    )
-                else {
-                    unreachable!()
-                };
-            }
-            DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
-                let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp
-                    .insert(
-                        *register_id,
-                        DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                    )
-                else {
-                    unreachable!()
-                };
-            }
-            DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
-                let Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure)) = register_mp.insert(
-                    *register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                ) else {
-                    unreachable!()
-                };
-            }
-            _ => unreachable!(),
-        }
     }
 }
 
@@ -1104,6 +1043,74 @@ impl GraphWrapper {
             return;
         };
         let _ = self.graph.update_edge(a, b, ());
+    }
+
+    fn dump_register_mp(
+        &self,
+        register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    ) {
+        for node_index in self.graph.node_identifiers() {
+            let Some(register_id) = self.node_index_2_register_id.get(&node_index) else {
+                // precolored
+                continue;
+            };
+            let Some(Some(color)) = self.graph.node_weight(node_index) else {
+                unreachable!()
+            };
+            match register_mp.get(register_id).unwrap() {
+                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure) => {
+                    let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure)) = register_mp
+                        .insert(
+                            *register_id,
+                            DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
+                        )
+                    else {
+                        unreachable!()
+                    };
+                }
+                DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure) => {
+                    let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure)) = register_mp
+                        .insert(
+                            *register_id,
+                            DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
+                        )
+                    else {
+                        unreachable!()
+                    };
+                }
+                DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure) => {
+                    let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure)) = register_mp
+                        .insert(
+                            *register_id,
+                            DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
+                        )
+                    else {
+                        unreachable!()
+                    };
+                }
+                DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure) => {
+                    let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure)) = register_mp
+                        .insert(
+                            *register_id,
+                            DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
+                        )
+                    else {
+                        unreachable!()
+                    };
+                }
+                DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+                    let Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure)) = register_mp
+                        .insert(
+                            *register_id,
+                            DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
+                        )
+                    else {
+                        unreachable!()
+                    };
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 }
 
