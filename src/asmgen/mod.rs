@@ -992,22 +992,44 @@ fn color(ig: &mut GraphWrapper, colors: &[Register]) {
     let Some(peo) = petgraph::algo::peo::peo(&ig.graph) else {
         unreachable!()
     };
+    let mut used_color: HashSet<Register> = HashSet::new();
     for node_index in peo.into_iter().rev() {
-        if matches!(ig.graph.node_weight(node_index), Some(Some(_color))) {
+        if let Some(Some(color)) = ig.graph.node_weight(node_index) {
             // already colored
+            let _ = used_color.insert(*color);
             continue;
         }
-        let mut colors: HashSet<Register> = colors.iter().copied().collect();
-        for neighbour in ig.graph.neighbors(node_index) {
-            if let Some(Some(color)) = ig.graph.node_weight(neighbour) {
-                let _ = colors.remove(color);
-            }
-        }
+        let conflict_colors: HashSet<Register> = ig
+            .graph
+            .neighbors(node_index)
+            .map(|n| ig.graph.node_weight(n).unwrap())
+            .flat_map(|x| x.clone())
+            .collect();
+
         let Some(x) = ig.graph.node_weight_mut(node_index) else {
             unreachable!()
         };
         assert_eq!(*x, None);
-        *x = Some(colors.into_iter().next().unwrap());
+        match used_color
+            .iter()
+            .filter(|c| !conflict_colors.contains(c))
+            .next()
+        {
+            Some(color) => {
+                *x = Some(*color);
+            }
+            None => {
+                let color = *colors
+                    .iter()
+                    .filter(|c| !conflict_colors.contains(c))
+                    .next()
+                    .unwrap();
+                *x = Some(color);
+                let true = used_color.insert(color) else {
+                    unreachable!()
+                };
+            }
+        }
     }
 }
 
