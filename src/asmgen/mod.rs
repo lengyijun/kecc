@@ -151,6 +151,7 @@ impl Translate<ir::TranslationUnit> for Asmgen {
             });
         }
 
+        asm.unit.rm_needless_mv();
         Ok(asm)
     }
 }
@@ -6481,4 +6482,38 @@ pub fn lbfs(graph: &StableGraph<Option<Register>, (), petgraph::Undirected>) -> 
     assert!(l.is_empty());
 
     res
+}
+
+impl TranslationUnit {
+    // rm `mv a0, a0`
+    // rm `fmv fa0, fa0`
+    fn rm_needless_mv(&mut self) {
+        for function in self.functions.iter_mut() {
+            let function = &mut function.body;
+            for block in function.blocks.iter_mut() {
+                block.instructions = block
+                    .instructions
+                    .iter()
+                    .filter_map(|instr| match instr {
+                        instr @ asm::Instruction::Pseudo(Pseudo::Fmv { rd, rs, .. }) => {
+                            if rd == rs {
+                                None
+                            } else {
+                                Some(instr)
+                            }
+                        }
+                        instr @ asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }) => {
+                            if rd == rs {
+                                None
+                            } else {
+                                Some(instr)
+                            }
+                        }
+                        instr => Some(instr),
+                    })
+                    .cloned()
+                    .collect();
+            }
+        }
+    }
 }
