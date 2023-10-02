@@ -1010,26 +1010,16 @@ fn color(ig: &mut GraphWrapper, colors: &[Register]) {
             unreachable!()
         };
         assert_eq!(*x, None);
-        match used_color
+
+        let available_color: Vec<Register> = used_color
             .iter()
+            .chain(colors.iter())
             .filter(|c| !conflict_colors.contains(c))
-            .next()
-        {
-            Some(color) => {
-                *x = Some(*color);
-            }
-            None => {
-                let color = *colors
-                    .iter()
-                    .filter(|c| !conflict_colors.contains(c))
-                    .next()
-                    .unwrap();
-                *x = Some(color);
-                let true = used_color.insert(color) else {
-                    unreachable!()
-                };
-            }
-        }
+            .copied()
+            .collect();
+
+        *x = Some(available_color[0]);
+        let _ = used_color.insert(available_color[0]);
     }
 }
 
