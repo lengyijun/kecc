@@ -444,7 +444,7 @@ fn translate_function(
 
     // before gen detailed asm::Instruction
     // we need to allocate register first
-    alloc_register(definition, &mut register_mp, &mut stack_offset_2_s0);
+    alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
 
     let mut init_allocation = vec![];
     for (aid, offset) in local_offset_v.into_iter().enumerate() {
@@ -973,12 +973,13 @@ fn translate_function(
 
 fn alloc_register(
     definition: &FunctionDefinition,
+    abi: &FunctionAbi,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     stack_offset_2_s0: &mut i64,
 ) {
     let reserved_rids = definition.get_rid_in_loop();
 
-    let mut int_ig = int_interference_graph(definition, register_mp);
+    let mut int_ig = int_interference_graph(definition, abi, register_mp);
     spills(
         &mut int_ig,
         &INT_REGISTERS,
@@ -989,7 +990,7 @@ fn alloc_register(
     color(&mut int_ig, &INT_REGISTERS, register_mp);
     int_ig.dump_register_mp(register_mp);
 
-    let mut float_ig = float_interference_graph(definition, register_mp);
+    let mut float_ig = float_interference_graph(definition, abi, register_mp);
     spills(
         &mut float_ig,
         &FLOAT_REGISTERS,
@@ -1010,9 +1011,7 @@ fn color(
     for node_index in lbfs(&ig.graph).into_iter() {
         if let Some(Some(color)) = ig.graph.node_weight(node_index) {
             // already colored
-            let true = used_color.insert(*color) else {
-                unreachable!()
-            };
+            let _ = used_color.insert(*color);
             continue;
         }
         let conflict_colors: HashSet<Register> = ig
@@ -1253,6 +1252,7 @@ fn float_inter_block_liveness_graph(
 
 fn int_interference_graph(
     definition: &FunctionDefinition,
+    abi: &FunctionAbi,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut int_ig: GraphWrapper = GraphWrapper::default();
@@ -1267,8 +1267,6 @@ fn int_interference_graph(
         }
     }
     let caller_saved_register = [
-        int_ig.graph.add_node(Some(Register::T5)),
-        int_ig.graph.add_node(Some(Register::T6)),
         int_ig.graph.add_node(Some(Register::A0)),
         int_ig.graph.add_node(Some(Register::A1)),
         int_ig.graph.add_node(Some(Register::A2)),
@@ -1277,6 +1275,8 @@ fn int_interference_graph(
         int_ig.graph.add_node(Some(Register::A5)),
         int_ig.graph.add_node(Some(Register::A6)),
         int_ig.graph.add_node(Some(Register::A7)),
+        int_ig.graph.add_node(Some(Register::T5)),
+        int_ig.graph.add_node(Some(Register::T6)),
     ];
 
     for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
@@ -1371,11 +1371,36 @@ fn int_interference_graph(
         }
     }
 
+    for (aid, param) in abi.params_alloc.iter().enumerate() {
+        let reg = match param {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => reg,
+            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
+            _ => continue,
+        };
+        let Some(node_index) = int_ig.register_id_2_node_index.get(&RegisterId::Arg {
+            bid: definition.bid_init,
+            aid,
+        }) else {
+            continue;
+        };
+
+        if int_ig
+            .graph
+            .neighbors(*node_index)
+            .all(|neighbour| neighbour != caller_saved_register[aid])
+        {
+            let x = int_ig.graph.node_weight_mut(*node_index).unwrap();
+            assert_eq!(*x, None);
+            *x = Some(*reg);
+        }
+    }
+
     int_ig
 }
 
 fn float_interference_graph(
     definition: &FunctionDefinition,
+    abi: &FunctionAbi,
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut float_ig: GraphWrapper = GraphWrapper::default();
@@ -1389,12 +1414,6 @@ fn float_interference_graph(
         }
     }
     let caller_saved_register = [
-        float_ig.graph.add_node(Some(Register::FT2)),
-        float_ig.graph.add_node(Some(Register::FT3)),
-        float_ig.graph.add_node(Some(Register::FT4)),
-        float_ig.graph.add_node(Some(Register::FT5)),
-        float_ig.graph.add_node(Some(Register::FT6)),
-        float_ig.graph.add_node(Some(Register::FT7)),
         float_ig.graph.add_node(Some(Register::FA0)),
         float_ig.graph.add_node(Some(Register::FA1)),
         float_ig.graph.add_node(Some(Register::FA2)),
@@ -1403,6 +1422,12 @@ fn float_interference_graph(
         float_ig.graph.add_node(Some(Register::FA5)),
         float_ig.graph.add_node(Some(Register::FA6)),
         float_ig.graph.add_node(Some(Register::FA7)),
+        float_ig.graph.add_node(Some(Register::FT2)),
+        float_ig.graph.add_node(Some(Register::FT3)),
+        float_ig.graph.add_node(Some(Register::FT4)),
+        float_ig.graph.add_node(Some(Register::FT5)),
+        float_ig.graph.add_node(Some(Register::FT6)),
+        float_ig.graph.add_node(Some(Register::FT7)),
     ];
 
     for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
@@ -1475,6 +1500,30 @@ fn float_interference_graph(
             for &rid in &live_set {
                 float_ig.add_edge(rid, arg);
             }
+        }
+    }
+
+    for (aid, param) in abi.params_alloc.iter().enumerate() {
+        let reg = match param {
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => reg,
+            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
+            _ => continue,
+        };
+        let Some(node_index) = float_ig.register_id_2_node_index.get(&RegisterId::Arg {
+            bid: definition.bid_init,
+            aid,
+        }) else {
+            continue;
+        };
+
+        if float_ig
+            .graph
+            .neighbors(*node_index)
+            .all(|neighbour| neighbour != caller_saved_register[aid])
+        {
+            let x = float_ig.graph.node_weight_mut(*node_index).unwrap();
+            assert_eq!(*x, None);
+            *x = Some(*reg);
         }
     }
 
