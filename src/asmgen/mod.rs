@@ -1541,9 +1541,7 @@ fn spills(
     reserved_rids: &HashSet<RegisterId>,
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
-    let Some(max_cliques) =
-        petgraph::algo::peo::cliques_larger_than_threshold(&ig.graph, colors.len())
-    else {
+    let Some(clique_iterator) = petgraph::algo::peo::CliqueIterator::new(&ig.graph) else {
         dbg!(&ig.node_index_2_register_id);
         println!(
             "{:?}",
@@ -1557,6 +1555,9 @@ fn spills(
         );
         panic!("not a chordal graph")
     };
+    let max_cliques: Vec<_> = clique_iterator
+        .filter(|clique| clique.len() >= colors.len())
+        .collect();
     if max_cliques.is_empty() {
         return;
     }
