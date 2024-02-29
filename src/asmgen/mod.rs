@@ -11,6 +11,7 @@ use crate::Translate;
 use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use ordered_float::OrderedFloat;
+
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::IntoNodeIdentifiers;
@@ -1185,19 +1186,20 @@ fn int_inter_block_liveness_graph(
     for (&curr_bid, block) in &definition.blocks {
         let v: Vec<RegisterId> = block
             .walk_register()
-            .filter_map(|(rid, _ )|
-                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid && bid == curr_bid {
+            .filter_map(|(rid, _)| {
+                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid
+                    && bid == curr_bid
+                {
                     None
                 } else {
-                    match register_mp.get(&rid){
-                        Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure{..}))
-                        | Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure{..}))
-                        | Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure))
-                         => Some(rid),
-                        _=> None,
+                    match register_mp.get(&rid) {
+                        Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }))
+                        | Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }))
+                        | Some(DirectOrInDirect::Direct(RegOrStack::LocalNotSure)) => Some(rid),
+                        _ => None,
                     }
                 }
-            )
+            })
             .collect();
         let None = usee.insert(curr_bid, v) else {
             unreachable!()
@@ -1229,19 +1231,21 @@ fn float_inter_block_liveness_graph(
     for (&curr_bid, block) in &definition.blocks {
         let v: Vec<RegisterId> = block
             .walk_register()
-            .filter_map(|(rid, _ )|
-                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid && bid == curr_bid {
+            .filter_map(|(rid, _)| {
+                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid
+                    && bid == curr_bid
+                {
                     None
                 } else {
-                    match register_mp.get(&rid){
-                        Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure{..}))
-                        | Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure{..}))
-                         => Some(rid),
-                        _=> None,
+                    match register_mp.get(&rid) {
+                        Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }))
+                        | Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure {
+                            ..
+                        })) => Some(rid),
+                        _ => None,
                     }
                 }
-
-            )
+            })
             .collect();
         let None = usee.insert(curr_bid, v) else {
             unreachable!()
