@@ -1033,7 +1033,7 @@ fn color(
             .filter(|c| !conflict_colors.contains(c))
             .copied();
 
-        match register_mp
+        let color = match register_mp
             .get(ig.node_index_2_register_id.get(&node_index).unwrap())
             .unwrap()
         {
@@ -1043,20 +1043,15 @@ fn color(
             | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { src: Some(src) }) => {
                 // don't use hashset !
                 if available_color_iter.clone().any(|x| x == *src) {
-                    *x = Some(*src);
-                    let _ = used_color.insert(*src);
+                    *src
                 } else {
-                    let color = available_color_iter.next().unwrap();
-                    *x = Some(color);
-                    let _ = used_color.insert(color);
+                    available_color_iter.next().unwrap()
                 }
             }
-            _ => {
-                let color = available_color_iter.next().unwrap();
-                *x = Some(color);
-                let _ = used_color.insert(color);
-            }
-        }
+            _ => available_color_iter.next().unwrap(),
+        };
+        *x = Some(color);
+        let _ = used_color.insert(color);
     }
 }
 
