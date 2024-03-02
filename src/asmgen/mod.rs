@@ -1594,6 +1594,7 @@ fn spills(
                     }
                     None => {
                         // already removed
+                        unreachable!()
                     }
                 }
             }
