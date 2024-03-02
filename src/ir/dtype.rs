@@ -1,9 +1,5 @@
-use core::convert::TryFrom;
-use core::fmt;
-use core::ops::Deref;
-use lang_c::ast;
 use lang_c::span::Node;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::Hash;
 use thiserror::Error;
 

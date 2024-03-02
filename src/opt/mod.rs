@@ -13,8 +13,6 @@ pub use simplify_cfg::{
     SimplifyCfg, SimplifyCfgConstProp, SimplifyCfgEmpty, SimplifyCfgMerge, SimplifyCfgReach,
 };
 
-use crate::ir;
-
 pub trait Optimize<T> {
     fn optimize(&mut self, code: &mut T) -> bool;
 }

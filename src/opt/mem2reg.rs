@@ -4,7 +4,6 @@ use std::iter::once;
 use std::ops::DerefMut;
 
 use crate::ir::*;
-use crate::opt::FunctionPass;
 use crate::*;
 
 pub type Mem2reg = FunctionPass<Mem2regInner>;

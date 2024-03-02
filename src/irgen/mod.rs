@@ -35,7 +35,6 @@
 //! [irgen-stmt-2]: https://youtu.be/UkaXaNw462U
 //! [github-qna-irgen]: https://github.com/kaist-cp/cs420/labels/homework%20-%20irgen
 #![allow(dead_code)]
-use core::convert::TryFrom;
 use core::fmt;
 use core::mem;
 use std::collections::{BTreeMap, HashMap};

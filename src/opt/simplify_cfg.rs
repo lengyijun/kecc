@@ -3,7 +3,6 @@ use std::iter::empty;
 use std::iter::once;
 
 use crate::ir::*;
-use crate::opt::FunctionPass;
 use crate::*;
 
 pub type SimplifyCfg = FunctionPass<

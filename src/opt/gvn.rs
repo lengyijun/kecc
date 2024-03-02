@@ -4,7 +4,7 @@ use std::hash::Hash;
 use lang_c::ast::{BinaryOperator, UnaryOperator};
 
 use crate::ir::{BlockId, Dtype, Operand, RegisterId};
-use crate::opt::{mem2reg, FunctionPass};
+use crate::opt::mem2reg;
 use crate::*;
 
 pub type Gvn = FunctionPass<GvnInner>;

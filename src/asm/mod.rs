@@ -3,7 +3,6 @@ mod write_asm;
 use crate::ir;
 use crate::write_base::*;
 
-use core::convert::TryFrom;
 use core::fmt;
 
 /// TODO

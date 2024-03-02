@@ -1,7 +1,5 @@
 //! Visualize IR.
 
-use std::collections::HashMap;
-
 use crate::ir::*;
 use crate::some_or;
 use crate::Translate;

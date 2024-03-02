@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
-use crate::opt::FunctionPass;
 use crate::*;
 
 pub type Deadcode = FunctionPass<Repeat<DeadcodeInner>>;

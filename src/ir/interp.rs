@@ -1,10 +1,7 @@
 #![allow(clippy::result_unit_err)]
 
-use core::fmt;
 use core::iter;
 use core::mem;
-use ordered_float::OrderedFloat;
-use std::collections::HashMap;
 use thiserror::Error;
 
 use itertools::izip;
@@ -412,10 +409,7 @@ impl<'i> StackFrame<'i> {
 }
 
 pub mod calculator {
-    use super::Value;
     use crate::ir::*;
-    use lang_c::ast;
-    use std::cmp::Ordering;
 
     fn calculate_integer_binary_operator_expression(
         op: &ast::BinaryOperator,

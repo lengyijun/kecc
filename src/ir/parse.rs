@@ -4,8 +4,6 @@ use std::path::Path;
 use lang_c::*;
 
 use crate::ir::*;
-use crate::utils::AssertSupported;
-use crate::Translate;
 use crate::*;
 
 peg::parser! {
