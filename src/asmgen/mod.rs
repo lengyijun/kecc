@@ -1563,14 +1563,20 @@ fn spills(
         return;
     }
     for clique in max_cliques {
-        let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = clique
+        let (uncolored, colored): (Vec<_>, Vec<_>) = clique
+            .into_iter()
+            .partition(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)));
+
+        let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = uncolored
             .into_iter()
             .filter(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)))
             .partition(|node_index| {
                 reserved_rids.contains(ig.node_index_2_register_id.get(node_index).unwrap())
             });
-        if reserved_node_index.len() + to_be_spilled.len() > colors.len() {
-            let count = reserved_node_index.len() + to_be_spilled.len() - colors.len();
+        if let Some(count) = usize::checked_sub(
+            reserved_node_index.len() + to_be_spilled.len() + colored.len(),
+            colors.len(),
+        ) {
             for node in to_be_spilled
                 .iter()
                 .chain(reserved_node_index.iter())
