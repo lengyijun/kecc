@@ -8,6 +8,7 @@ use crate::ir::{
     self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
 };
 use crate::Translate;
+use bimap::BiMap;
 use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use ordered_float::OrderedFloat;
@@ -1034,7 +1035,11 @@ fn color(
             .copied();
 
         let color = match register_mp
-            .get(ig.node_index_2_register_id.get(&node_index).unwrap())
+            .get(
+                ig.register_id_2_node_index
+                    .get_by_right(&node_index)
+                    .unwrap(),
+            )
             .unwrap()
         {
             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { src: Some(src) })
@@ -1058,32 +1063,28 @@ fn color(
 #[derive(Debug, Default)]
 struct GraphWrapper {
     graph: StableGraph<Option<Register>, (), petgraph::Undirected>,
-    register_id_2_node_index: HashMap<RegisterId, NodeIndex>,
-    node_index_2_register_id: HashMap<NodeIndex, RegisterId>,
+    register_id_2_node_index: BiMap<RegisterId, NodeIndex>,
 }
 
 impl GraphWrapper {
     fn add_node(&mut self, register_id: RegisterId) {
-        match self.register_id_2_node_index.entry(register_id) {
-            std::collections::hash_map::Entry::Occupied(_) => unreachable!(),
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let node = self.graph.add_node(None);
-                let _ = v.insert(node);
-                let None = self.node_index_2_register_id.insert(node, register_id) else {
-                    unreachable!()
-                };
-            }
-        }
+        let node = self.graph.add_node(None);
+        let Ok(()) = self
+            .register_id_2_node_index
+            .insert_no_overwrite(register_id, node)
+        else {
+            unreachable!()
+        };
     }
 
     fn add_edge(&mut self, a: RegisterId, b: RegisterId) {
         if a == b {
             return;
         }
-        let Some(&a) = self.register_id_2_node_index.get(&a) else {
+        let Some(&a) = self.register_id_2_node_index.get_by_left(&a) else {
             return;
         };
-        let Some(&b) = self.register_id_2_node_index.get(&b) else {
+        let Some(&b) = self.register_id_2_node_index.get_by_left(&b) else {
             return;
         };
         let _ = self.graph.update_edge(a, b, ());
@@ -1094,7 +1095,7 @@ impl GraphWrapper {
         register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     ) {
         for node_index in self.graph.node_identifiers() {
-            let Some(register_id) = self.node_index_2_register_id.get(&node_index) else {
+            let Some(register_id) = self.register_id_2_node_index.get_by_right(&node_index) else {
                 // precolored
                 continue;
             };
@@ -1338,7 +1339,7 @@ fn int_interference_graph(
                         ir::Operand::Register { rid, .. } => Some(rid),
                     }))
                 {
-                    let Some(&a) = int_ig.register_id_2_node_index.get(a) else {
+                    let Some(&a) = int_ig.register_id_2_node_index.get_by_left(a) else {
                         continue;
                     };
                     for &b in &caller_saved_register {
@@ -1376,10 +1377,13 @@ fn int_interference_graph(
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
             _ => continue,
         };
-        let Some(node_index) = int_ig.register_id_2_node_index.get(&RegisterId::Arg {
-            bid: definition.bid_init,
-            aid,
-        }) else {
+        let Some(node_index) = int_ig
+            .register_id_2_node_index
+            .get_by_left(&RegisterId::Arg {
+                bid: definition.bid_init,
+                aid,
+            })
+        else {
             continue;
         };
 
@@ -1468,7 +1472,7 @@ fn float_interference_graph(
                         ir::Operand::Register { rid, .. } => Some(rid),
                     }))
                 {
-                    let Some(&a) = float_ig.register_id_2_node_index.get(a) else {
+                    let Some(&a) = float_ig.register_id_2_node_index.get_by_left(a) else {
                         continue;
                     };
                     for &b in &caller_saved_register {
@@ -1508,10 +1512,13 @@ fn float_interference_graph(
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
             _ => continue,
         };
-        let Some(node_index) = float_ig.register_id_2_node_index.get(&RegisterId::Arg {
-            bid: definition.bid_init,
-            aid,
-        }) else {
+        let Some(node_index) = float_ig
+            .register_id_2_node_index
+            .get_by_left(&RegisterId::Arg {
+                bid: definition.bid_init,
+                aid,
+            })
+        else {
             continue;
         };
 
@@ -1537,7 +1544,7 @@ fn spills(
     register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
     let Some(clique_iterator) = petgraph::algo::peo::CliqueIterator::new(&ig.graph) else {
-        dbg!(&ig.node_index_2_register_id);
+        dbg!(&ig.register_id_2_node_index);
         println!(
             "{:?}",
             petgraph::dot::Dot::with_config(
@@ -1571,7 +1578,11 @@ fn spills(
             .into_iter()
             .filter(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)))
             .partition(|node_index| {
-                reserved_rids.contains(ig.node_index_2_register_id.get(node_index).unwrap())
+                reserved_rids.contains(
+                    ig.register_id_2_node_index
+                        .get_by_right(node_index)
+                        .unwrap(),
+                )
             });
         if let Some(count) = usize::checked_sub(
             reserved_node_index.len() + to_be_spilled.len() + colored.len(),
@@ -1589,7 +1600,7 @@ fn spills(
                     }
                     Some(None) => {
                         spill(
-                            *ig.node_index_2_register_id.get(node).unwrap(),
+                            *ig.register_id_2_node_index.get_by_right(node).unwrap(),
                             stack_offset_2_s0,
                             register_mp,
                         );
