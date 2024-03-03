@@ -16,7 +16,7 @@ use lang_c::ast;
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use crate::write_base::*;
 pub use dtype::{Dtype, DtypeError, HasDtype};
@@ -495,7 +495,7 @@ impl HasDtype for Operand {
     }
 }
 
-#[derive(Debug, Eq, Clone, Copy)]
+#[derive(Debug, Eq, Clone, Copy, PartialEq, PartialOrd, Ord, Hash)]
 pub enum RegisterId {
     /// Registers holding pointers to local allocations.
     ///
@@ -550,46 +550,6 @@ impl fmt::Display for RegisterId {
             Self::Local { aid } => write!(f, "%l{aid}"),
             Self::Arg { bid, aid } => write!(f, "%{bid}:p{aid}"),
             Self::Temp { bid, iid } => write!(f, "%{bid}:i{iid}"),
-        }
-    }
-}
-
-impl PartialEq<RegisterId> for RegisterId {
-    fn eq(&self, other: &RegisterId) -> bool {
-        match (self, other) {
-            (Self::Local { aid }, Self::Local { aid: other_aid }) => aid == other_aid,
-            (
-                Self::Arg { bid, aid },
-                Self::Arg {
-                    bid: other_bid,
-                    aid: other_aid,
-                },
-            ) => bid == other_bid && aid == other_aid,
-            (
-                Self::Temp { bid, iid },
-                Self::Temp {
-                    bid: other_bid,
-                    iid: other_iid,
-                },
-            ) => bid == other_bid && iid == other_iid,
-            _ => false,
-        }
-    }
-}
-
-impl Hash for RegisterId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            Self::Local { aid } => aid.hash(state),
-            Self::Arg { bid, aid } => {
-                // TODO: needs to distinguish arg/temp?
-                bid.hash(state);
-                aid.hash(state);
-            }
-            Self::Temp { bid, iid } => {
-                bid.hash(state);
-                iid.hash(state);
-            }
         }
     }
 }
