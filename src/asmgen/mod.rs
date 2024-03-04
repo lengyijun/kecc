@@ -5826,7 +5826,7 @@ struct FunctionAbi {
 
 impl FunctionSignature {
     fn try_alloc(&self, source: &ir::TranslationUnit) -> FunctionAbi {
-        let mut params: Vec<ParamAlloc> =
+        let mut params_alloc: Vec<ParamAlloc> =
             vec![
                 ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(Register::A0)));
                 self.params.len()
@@ -5836,7 +5836,7 @@ impl FunctionSignature {
         let mut next_float_reg: usize = 0;
         let mut caller_alloc: usize = 0;
 
-        for (i, param) in self.params.iter().enumerate() {
+        for (param, param_alloc) in self.params.iter().zip(params_alloc.iter_mut()) {
             let (size, align) = param.size_align_of(&source.structs).unwrap();
             let align = align.max(4);
             match param {
@@ -5846,13 +5846,13 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                        *param_alloc = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                             RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
                             },
                         ));
                     } else {
-                        params[i] =
+                        *param_alloc =
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::Integer, next_int_reg),
                             )));
@@ -5865,13 +5865,13 @@ impl FunctionSignature {
                             caller_alloc += 1;
                         }
                         caller_alloc += size;
-                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                        *param_alloc = ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                             RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
                             },
                         ));
                     } else {
-                        params[i] =
+                        *param_alloc =
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::FloatingPoint, next_float_reg),
                             )));
@@ -6006,19 +6006,19 @@ impl FunctionSignature {
                                 _ => unreachable!(),
                             }
                         }
-                        params[i] = ParamAlloc::StructInRegister(x);
+                        *param_alloc = ParamAlloc::StructInRegister(x);
                     } else if next_int_reg > 7 {
                         while caller_alloc % 8 != 0 {
                             caller_alloc += 1;
                         }
                         caller_alloc += 8;
-                        params[i] = ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                        *param_alloc = ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
                             RegOrStack::Stack {
                                 offset_to_s0: caller_alloc.try_into().unwrap(),
                             },
                         ));
                     } else {
-                        params[i] =
+                        *param_alloc =
                             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
                                 Register::arg(asm::RegisterType::Integer, next_int_reg),
                             )));
@@ -6047,7 +6047,7 @@ impl FunctionSignature {
 
         let caller_alloc = caller_alloc;
 
-        for x in params.iter_mut() {
+        for x in params_alloc.iter_mut() {
             match x {
                 ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                     offset_to_s0,
@@ -6066,7 +6066,7 @@ impl FunctionSignature {
 
         FunctionAbi {
             ret_alloc,
-            params_alloc: params,
+            params_alloc,
             caller_alloc,
         }
     }
