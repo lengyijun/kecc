@@ -18,6 +18,7 @@ use petgraph::stable_graph::StableGraph;
 use petgraph::visit::IntoNodeIdentifiers;
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
+use std::ops::Deref;
 
 static INT_REGISTERS: [Register; 21] = [
     Register::S1,
@@ -5918,30 +5919,28 @@ impl FunctionSignature {
                         while j < offsets.len() {
                             match &*fields[j] {
                                 ir::Dtype::Int { width: 32, .. } => {
-                                    if j < offsets.len() - 1 {
-                                        // check the next one
-                                        match &*fields[j + 1] {
-                                            ir::Dtype::Int { width: 32, .. }
-                                            | ir::Dtype::Float { width: 32, .. } => {
-                                                x[j] = RegisterCouple::Double(Register::arg(
-                                                    asm::RegisterType::Integer,
-                                                    next_int_reg,
-                                                ));
-                                                next_int_reg += 1;
-                                                x[j + 1] = RegisterCouple::MergedToPrevious;
-                                                j += 2;
-                                            }
-                                            ir::Dtype::Int { width: 64, .. }
-                                            | ir::Dtype::Float { width: 64, .. } => {}
-                                            _ => unreachable!(),
+                                    match fields.get(j + 1).map(Deref::deref) {
+                                        None => {
+                                            x[j] = RegisterCouple::Single(Register::arg(
+                                                asm::RegisterType::Integer,
+                                                next_int_reg,
+                                            ));
+                                            next_int_reg += 1;
+                                            j += 1;
                                         }
-                                    } else {
-                                        x[j] = RegisterCouple::Single(Register::arg(
-                                            asm::RegisterType::Integer,
-                                            next_int_reg,
-                                        ));
-                                        next_int_reg += 1;
-                                        j += 1;
+                                        Some(ir::Dtype::Int { width: 32, .. })
+                                        | Some(ir::Dtype::Float { width: 32, .. }) => {
+                                            x[j] = RegisterCouple::Double(Register::arg(
+                                                asm::RegisterType::Integer,
+                                                next_int_reg,
+                                            ));
+                                            next_int_reg += 1;
+                                            x[j + 1] = RegisterCouple::MergedToPrevious;
+                                            j += 2;
+                                        }
+                                        Some(ir::Dtype::Int { width: 64, .. })
+                                        | Some(ir::Dtype::Float { width: 64, .. }) => {}
+                                        _ => unreachable!(),
                                     }
                                 }
                                 ir::Dtype::Int { width: 64, .. } => {
@@ -5953,48 +5952,47 @@ impl FunctionSignature {
                                     j += 1;
                                 }
                                 ir::Dtype::Float { width: 32, .. } => {
-                                    if j == offsets.len() - 1 {
-                                        x[j] = RegisterCouple::Single(Register::arg(
-                                            asm::RegisterType::FloatingPoint,
-                                            next_float_reg,
-                                        ));
-                                        next_float_reg += 1;
-                                        j += 1;
-                                    } else {
-                                        match &*fields[j + 1] {
-                                            ir::Dtype::Int { width: 32, .. } => {
-                                                x[j] = RegisterCouple::Double(Register::arg(
-                                                    asm::RegisterType::Integer,
-                                                    next_int_reg,
-                                                ));
-                                                next_int_reg += 1;
-                                                x[j + 1] = RegisterCouple::MergedToPrevious;
-                                                j += 2;
-                                            }
-                                            ir::Dtype::Float { width: 32, .. } => {
-                                                x[j] = RegisterCouple::Single(Register::arg(
-                                                    asm::RegisterType::FloatingPoint,
-                                                    next_float_reg,
-                                                ));
-                                                next_float_reg += 1;
-                                                x[j + 1] = RegisterCouple::Single(Register::arg(
-                                                    asm::RegisterType::FloatingPoint,
-                                                    next_float_reg,
-                                                ));
-                                                next_float_reg += 1;
-                                                j += 2;
-                                            }
-                                            ir::Dtype::Int { width: 64, .. }
-                                            | ir::Dtype::Float { width: 64, .. } => {
-                                                x[j] = RegisterCouple::Single(Register::arg(
-                                                    asm::RegisterType::FloatingPoint,
-                                                    next_float_reg,
-                                                ));
-                                                next_float_reg += 1;
-                                                j += 1;
-                                            }
-                                            _ => unreachable!(),
+                                    match fields.get(j + 1).map(Deref::deref) {
+                                        None => {
+                                            x[j] = RegisterCouple::Single(Register::arg(
+                                                asm::RegisterType::FloatingPoint,
+                                                next_float_reg,
+                                            ));
+                                            next_float_reg += 1;
+                                            j += 1;
                                         }
+                                        Some(ir::Dtype::Int { width: 32, .. }) => {
+                                            x[j] = RegisterCouple::Double(Register::arg(
+                                                asm::RegisterType::Integer,
+                                                next_int_reg,
+                                            ));
+                                            next_int_reg += 1;
+                                            x[j + 1] = RegisterCouple::MergedToPrevious;
+                                            j += 2;
+                                        }
+                                        Some(ir::Dtype::Float { width: 32, .. }) => {
+                                            x[j] = RegisterCouple::Single(Register::arg(
+                                                asm::RegisterType::FloatingPoint,
+                                                next_float_reg,
+                                            ));
+                                            next_float_reg += 1;
+                                            x[j + 1] = RegisterCouple::Single(Register::arg(
+                                                asm::RegisterType::FloatingPoint,
+                                                next_float_reg,
+                                            ));
+                                            next_float_reg += 1;
+                                            j += 2;
+                                        }
+                                        Some(ir::Dtype::Int { width: 64, .. })
+                                        | Some(ir::Dtype::Float { width: 64, .. }) => {
+                                            x[j] = RegisterCouple::Single(Register::arg(
+                                                asm::RegisterType::FloatingPoint,
+                                                next_float_reg,
+                                            ));
+                                            next_float_reg += 1;
+                                            j += 1;
+                                        }
+                                        _ => unreachable!(),
                                     }
                                 }
                                 ir::Dtype::Float { width: 64, .. } => {
