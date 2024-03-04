@@ -41,3 +41,4 @@ peg = "0.8.1"
 rand = "0.8.5"
 petgraph = {git = "https://github.com/lengyijun/petgraph", branch = "is_chordal" }
 bimap = "0.6.3"
+regalloc2 = "0.9.3"

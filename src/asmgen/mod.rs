@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+mod helper;
 mod mesh;
 
 use crate::asm::{
