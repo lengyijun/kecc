@@ -5939,7 +5939,9 @@ impl FunctionSignature {
                                             j += 2;
                                         }
                                         Some(ir::Dtype::Int { width: 64, .. })
-                                        | Some(ir::Dtype::Float { width: 64, .. }) => {}
+                                        | Some(ir::Dtype::Float { width: 64, .. }) => {
+                                            unreachable!()
+                                        }
                                         _ => unreachable!(),
                                     }
                                 }
