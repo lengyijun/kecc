@@ -1,6 +1,4 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::iter::empty;
-use std::iter::once;
 use std::ops::DerefMut;
 
 use crate::ir::*;
@@ -482,7 +480,7 @@ impl FunctionDefinition {
     pub fn calculate_pred(&self) -> HashMap<BlockId, HashSet<BlockId>> {
         let mut hm: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
         for (&id, b) in &self.blocks {
-            for next_id in successor(&b.exit) {
+            for next_id in b.exit.walk_jump_bid() {
                 let _b = hm.entry(next_id).or_default().insert(id);
             }
         }
@@ -524,28 +522,12 @@ fn dfs_walker(
     let true = visited.insert(node) else {
         unreachable!()
     };
-    for succ in successor(&code.blocks.get(&node).unwrap().exit) {
+    for succ in code.blocks.get(&node).unwrap().exit.walk_jump_bid() {
         if !visited.contains(&succ) {
             dfs_walker(succ, code, visited, order);
         }
     }
     order.push(node);
-}
-
-fn successor<'a>(exit: &'a BlockExit) -> Box<dyn Iterator<Item = BlockId> + 'a> {
-    match &exit {
-        BlockExit::Jump { arg } => Box::new(once(arg.bid)),
-        BlockExit::ConditionalJump {
-            arg_then, arg_else, ..
-        } => Box::new(once(arg_then.bid).chain(once(arg_else.bid))),
-        BlockExit::Switch { default, cases, .. } => Box::new(
-            cases
-                .iter()
-                .map(|(_, jump_arg)| jump_arg.bid)
-                .chain(once(default.bid)),
-        ),
-        BlockExit::Return { .. } | BlockExit::Unreachable => Box::new(empty()),
-    }
 }
 
 fn dominance_frontier(
