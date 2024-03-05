@@ -144,7 +144,8 @@ impl From<regalloc2::VReg> for RegisterId {
 }
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
-enum Yank {
+pub enum Yank {
+    BeforeFirst,
     Instruction(usize),
     BlockExit,
 }
@@ -161,6 +162,10 @@ impl<'a> Gape<'a> {
         let mut insn = regalloc2::Inst::new(0);
 
         for (&bid, block) in &definition.blocks {
+            inst_mp
+                .insert_no_overwrite((bid, Yank::BeforeFirst), insn)
+                .unwrap();
+            insn = insn.next();
             for offset in 0..block.instructions.len() {
                 inst_mp
                     .insert_no_overwrite((bid, Yank::Instruction(offset)), insn)
@@ -195,7 +200,8 @@ impl<'a> regalloc2::Function for Gape<'a> {
         self.definition
             .blocks
             .values()
-            .map(|b| b.instructions.len() + 1) // + 1 : blockexit
+            .map(|b| b.instructions.len() + 1 + 1) // + 1 : blockexit
+            // +1 : BeforeFirst
             .fold(0, |a, b| a + b)
     }
 
@@ -259,7 +265,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::Instruction(_) => false,
+            Yank::BeforeFirst | Yank::Instruction(_) => false,
             Yank::BlockExit => match self.definition.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
@@ -270,7 +276,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::Instruction(_) => false,
+            Yank::BeforeFirst | Yank::Instruction(_) => false,
             Yank::BlockExit => match self.definition.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
@@ -318,71 +324,9 @@ impl<'a> regalloc2::Function for Gape<'a> {
         let block = &self.definition.blocks[&bid];
 
         match yank {
-            Yank::BlockExit => match block.exit {
-                BlockExit::Jump { .. }
-                | BlockExit::ConditionalJump { .. }
-                | BlockExit::Switch { .. } => block
-                    .exit
-                    .walk_register()
-                    .map(|(rid, dtype)| {
-                        regalloc2::Operand::new(
-                            regalloc2::VReg::new(rid.clone().into(), dtype.clone().into()),
-                            regalloc2::OperandConstraint::Any,
-                            regalloc2::OperandKind::Use,
-                            regalloc2::OperandPos::Early,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .leak(),
-
-                BlockExit::Return {
-                    value:
-                        Operand::Register {
-                            rid,
-                            dtype: Dtype::Int { .. } | Dtype::Pointer { .. },
-                        },
-                } => {
-                    let x = regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Int),
-                        regalloc2::OperandConstraint::FixedReg(Register::A0.into()),
-                        regalloc2::OperandKind::Use,
-                        regalloc2::OperandPos::Early,
-                    );
-                    vec![x].leak()
-                }
-                BlockExit::Return {
-                    value:
-                        Operand::Register {
-                            rid,
-                            dtype: Dtype::Float { .. },
-                        },
-                } => {
-                    let x = regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Float),
-                        regalloc2::OperandConstraint::FixedReg(Register::FA0.into()),
-                        regalloc2::OperandKind::Use,
-                        regalloc2::OperandPos::Early,
-                    );
-                    vec![x].leak()
-                }
-                BlockExit::Return {
-                    value:
-                        Operand::Register {
-                            dtype: Dtype::Struct { .. },
-                            ..
-                        },
-                }
-                | BlockExit::Return {
-                    value: Operand::Constant(..),
-                } => &[],
-                BlockExit::Unreachable => unreachable!(),
-                _ => unreachable!(),
-            },
-            Yank::Instruction(iid) => {
-                let instruction: &Instruction = &block.instructions[iid];
-                let mut v: Vec<regalloc2::Operand> = Vec::new();
-                if iid == 0 && self.entry_block() == bid.into() {
-                    let iter = block
+            Yank::BeforeFirst => {
+                if self.entry_block() == bid.into() {
+                    block
                         .phinodes
                         .iter()
                         .zip(self.abi.params_alloc.iter())
@@ -433,9 +377,79 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                 ) => unreachable!(),
                                 crate::asmgen::ParamAlloc::StructInRegister(_) => None,
                             }
-                        });
-                    v.extend(iter);
+                        })
+                        .collect::<Vec<_>>()
+                        .leak()
+                } else {
+                    &[]
                 }
+            }
+            Yank::BlockExit => match block.exit {
+                BlockExit::Jump { .. }
+                | BlockExit::ConditionalJump { .. }
+                | BlockExit::Switch { .. } => block
+                    .exit
+                    .walk_register()
+                    .filter_map(|(rid, dtype)| match rid {
+                        RegisterId::Local { .. } => None,
+                        RegisterId::Arg { .. } | RegisterId::Temp { .. } => {
+                            Some(regalloc2::Operand::new(
+                                regalloc2::VReg::new(rid.clone().into(), dtype.clone().into()),
+                                regalloc2::OperandConstraint::Any,
+                                regalloc2::OperandKind::Use,
+                                regalloc2::OperandPos::Early,
+                            ))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .leak(),
+
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            rid,
+                            dtype: Dtype::Int { .. } | Dtype::Pointer { .. },
+                        },
+                } => {
+                    let x = regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Int),
+                        regalloc2::OperandConstraint::FixedReg(Register::A0.into()),
+                        regalloc2::OperandKind::Use,
+                        regalloc2::OperandPos::Early,
+                    );
+                    vec![x].leak()
+                }
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            rid,
+                            dtype: Dtype::Float { .. },
+                        },
+                } => {
+                    let x = regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Float),
+                        regalloc2::OperandConstraint::FixedReg(Register::FA0.into()),
+                        regalloc2::OperandKind::Use,
+                        regalloc2::OperandPos::Early,
+                    );
+                    vec![x].leak()
+                }
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            dtype: Dtype::Struct { .. },
+                            ..
+                        },
+                }
+                | BlockExit::Return {
+                    value: Operand::Constant(..),
+                } => &[],
+                BlockExit::Unreachable => unreachable!(),
+                _ => unreachable!(),
+            },
+            Yank::Instruction(iid) => {
+                let instruction: &Instruction = &block.instructions[iid];
+                let mut v: Vec<regalloc2::Operand> = Vec::new();
 
                 let rid = RegisterId::Temp { bid, iid };
                 match instruction.dtype() {
@@ -459,7 +473,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     Dtype::Typedef { .. } => unreachable!(),
                 }
 
-                for (rid, dtype) in instruction.walk_register() {
+                for (rid, dtype) in instruction.walk_register().filter(|(rid, _)| match rid {
+                    RegisterId::Local { .. } => false,
+                    RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
+                }) {
                     match dtype {
                         Dtype::Unit { .. } => unreachable!(),
                         Dtype::Int { .. } | Dtype::Pointer { .. } => {
@@ -543,7 +560,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     res
                 }
             },
-            Yank::BlockExit => regalloc2::PRegSet::empty(),
+            Yank::BeforeFirst | Yank::BlockExit => regalloc2::PRegSet::empty(),
         }
     }
 
