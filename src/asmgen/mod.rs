@@ -948,7 +948,6 @@ fn translate_function(
             &register_mp,
             source,
             function_abi_mp,
-            abi,
             before_ret_instructions.clone(),
             float_mp,
         );
@@ -1700,7 +1699,6 @@ fn translate_block(
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
-    abi: &FunctionAbi,
     before_ret_instructions: Vec<asm::Instruction>,
     float_mp: &mut FloatMp,
 ) -> Vec<asm::Instruction> {
@@ -3952,7 +3950,6 @@ fn translate_block(
                     FunctionAbi {
                         params_alloc,
                         caller_alloc,
-                        ret_alloc,
                     },
                 ) = match callee {
                     ir::Operand::Constant(ir::Constant::GlobalVariable {
@@ -4229,8 +4226,8 @@ fn translate_block(
                 res.extend(cp_parallel(to_be_cp_parallel));
                 res.extend(after_cp_parallel);
 
-                match ret_alloc {
-                    RetLocation::OnStack => {
+                match ret_dtype {
+                    ir::Dtype::Struct { .. } => {
                         let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
                             register_mp.get(&RegisterId::Temp { bid, iid }).unwrap()
                         else {
@@ -4244,8 +4241,9 @@ fn translate_block(
                         ));
                         res.extend(mk_stype(SType::SD, Register::Sp, Register::T0, 0));
                     }
-                    RetLocation::InRegister => {}
-                };
+                    ir::Dtype::Array { .. } => unreachable!(),
+                    _ => {}
+                }
 
                 match callee {
                     ir::Operand::Constant(ir::Constant::GlobalVariable {
@@ -4282,66 +4280,60 @@ fn translate_block(
                     }
                     _ => unreachable!(),
                 }
-                match ret_alloc {
-                    RetLocation::OnStack => {}
-                    RetLocation::InRegister => match ret_dtype {
-                        ir::Dtype::Unit { .. } => {}
-                        ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                            match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                                DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                        rd: *dest_reg,
-                                        rs: Register::A0,
-                                    }));
-                                }
-                                DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                    res.extend(mk_stype(
-                                        SType::store(ret_dtype.clone()),
-                                        Register::S0,
-                                        Register::A0,
-                                        *offset_to_s0 as u64,
-                                    ));
-                                }
-                                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
-                                    ..
-                                })
-                                | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
-                                    unreachable!()
-                                }
-                                DirectOrInDirect::InDirect(_) => unreachable!(),
+
+                match ret_dtype {
+                    ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
+                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
+                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
+                                    rd: *dest_reg,
+                                    rs: Register::A0,
+                                }));
                             }
-                        }
-                        ir::Dtype::Float { .. } => {
-                            match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                                DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                    res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
-                                        rd: *dest_reg,
-                                        rs: Register::FA0,
-                                        data_size: DataSize::try_from(ret_dtype.clone()).unwrap(),
-                                    }));
-                                }
-                                DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                    res.extend(mk_stype(
-                                        SType::store(ret_dtype.clone()),
-                                        Register::S0,
-                                        Register::FA0,
-                                        *offset_to_s0 as u64,
-                                    ));
-                                }
-                                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
-                                    ..
-                                })
-                                | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
-                                    unreachable!()
-                                }
-                                DirectOrInDirect::InDirect(_) => unreachable!(),
+                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                                res.extend(mk_stype(
+                                    SType::store(ret_dtype.clone()),
+                                    Register::S0,
+                                    Register::A0,
+                                    *offset_to_s0 as u64,
+                                ));
                             }
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
+                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+                                unreachable!()
+                            }
+                            DirectOrInDirect::InDirect(_) => unreachable!(),
                         }
-                        _ => unreachable!(),
-                    },
+                    }
+                    ir::Dtype::Float { .. } => {
+                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
+                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
+                                    rd: *dest_reg,
+                                    rs: Register::FA0,
+                                    data_size: DataSize::try_from(ret_dtype.clone()).unwrap(),
+                                }));
+                            }
+                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
+                                res.extend(mk_stype(
+                                    SType::store(ret_dtype.clone()),
+                                    Register::S0,
+                                    Register::FA0,
+                                    *offset_to_s0 as u64,
+                                ));
+                            }
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
+                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })
+                            | DirectOrInDirect::Direct(RegOrStack::LocalNotSure) => {
+                                unreachable!()
+                            }
+                            DirectOrInDirect::InDirect(_) => unreachable!(),
+                        }
+                    }
+                    _ => {}
                 }
+
                 if caller_alloc != 0 {
                     res.extend(mk_itype(
                         IType::Addi(DataSize::Double),
@@ -5052,9 +5044,9 @@ fn translate_block(
         }
 
         ir::BlockExit::Return { value } => {
-            match (&abi.ret_alloc, value.dtype()) {
-                (_, ir::Dtype::Unit { .. }) => {}
-                (RetLocation::InRegister, ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. }) => {
+            match value.dtype() {
+                ir::Dtype::Unit { .. } => {}
+                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
                     store_operand_to_reg(
                         value.clone(),
                         Register::A0,
@@ -5063,7 +5055,7 @@ fn translate_block(
                         float_mp,
                     );
                 }
-                (RetLocation::InRegister, ir::Dtype::Float { .. }) => {
+                ir::Dtype::Float { .. } => {
                     store_operand_to_reg(
                         value.clone(),
                         Register::FA0,
@@ -5072,14 +5064,7 @@ fn translate_block(
                         float_mp,
                     );
                 }
-                (RetLocation::InRegister, ir::Dtype::Array { .. }) => unimplemented!(),
-                (RetLocation::InRegister, ir::Dtype::Struct { .. }) => unreachable!(),
-                (RetLocation::InRegister, ir::Dtype::Function { .. }) => unimplemented!(),
-                (RetLocation::OnStack, ir::Dtype::Int { .. }) => unreachable!(),
-                (RetLocation::OnStack, ir::Dtype::Float { .. }) => unreachable!(),
-                (RetLocation::OnStack, ir::Dtype::Pointer { .. }) => unreachable!(),
-                (RetLocation::OnStack, ir::Dtype::Array { .. }) => unimplemented!(),
-                (RetLocation::OnStack, ir::Dtype::Struct { .. }) => match value {
+                ir::Dtype::Struct { .. } => match value {
                     ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
                     ir::Operand::Register { rid, dtype } => match register_mp.get(rid).unwrap() {
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: dest }) => {
@@ -5098,8 +5083,7 @@ fn translate_block(
                     },
                     _ => unreachable!(),
                 },
-                (RetLocation::OnStack, ir::Dtype::Function { .. }) => unreachable!(),
-                (_, ir::Dtype::Typedef { .. }) => unreachable!(),
+                _ => unreachable!(),
             }
             res.extend(before_ret_instructions);
         }
@@ -5803,13 +5787,6 @@ enum ParamAlloc {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RetLocation {
-    OnStack,
-    /// in A0 or FA0
-    InRegister,
-}
-
-#[derive(Debug, Clone, Copy)]
 enum DirectOrInDirect<T: Clone + Copy> {
     Direct(T),
     InDirect(T),
@@ -5818,8 +5795,6 @@ enum DirectOrInDirect<T: Clone + Copy> {
 #[derive(Clone)]
 struct FunctionAbi {
     params_alloc: Vec<ParamAlloc>,
-    /// if on stack, offset must be zero
-    ret_alloc: RetLocation,
     /// contain the ret_alloc
     caller_alloc: usize,
 }
@@ -6038,13 +6013,12 @@ impl FunctionSignature {
             caller_alloc += 1;
         }
 
-        let ret_alloc = match &self.ret {
+        match &self.ret {
             ir::Dtype::Array { .. } => unimplemented!(),
             ir::Dtype::Struct { .. } => {
                 caller_alloc += 16;
-                RetLocation::OnStack
             }
-            _ => RetLocation::InRegister,
+            _ => {}
         };
 
         let caller_alloc = caller_alloc;
@@ -6067,7 +6041,6 @@ impl FunctionSignature {
         }
 
         FunctionAbi {
-            ret_alloc,
             params_alloc,
             caller_alloc,
         }
