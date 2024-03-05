@@ -17,18 +17,6 @@ use crate::{
 
 use super::FunctionAbi;
 
-impl From<regalloc2::Block> for BlockId {
-    fn from(value: regalloc2::Block) -> Self {
-        Self(value.index())
-    }
-}
-
-impl Into<regalloc2::Block> for BlockId {
-    fn into(self) -> regalloc2::Block {
-        regalloc2::Block::new(self.0)
-    }
-}
-
 impl Into<regalloc2::RegClass> for RegisterType {
     fn into(self) -> regalloc2::RegClass {
         match self {
@@ -105,8 +93,9 @@ pub enum Yank {
 pub struct Gape<'a> {
     definition: &'a FunctionDefinition,
     abi: FunctionAbi,
-    inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
-    reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
+    pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
+    pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
+    block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
 }
 
 impl<'a> Gape<'a> {
@@ -176,12 +165,24 @@ impl<'a> Gape<'a> {
         reg_mp
     }
 
+    fn init_block_mp(definition: &'a FunctionDefinition) -> BiMap<BlockId, regalloc2::Block> {
+        let mut block_mp: BiMap<BlockId, regalloc2::Block> = BiMap::new();
+        let mut block = regalloc2::Block::new(0);
+
+        for bid in definition.blocks.keys() {
+            block_mp.insert_no_overwrite(*bid, block).unwrap();
+            block = block.next()
+        }
+        block_mp
+    }
+
     pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
         Self {
             definition,
             abi,
             inst_mp: Frozen::freeze(Self::init_inst_mp(definition)),
             reg_mp: Frozen::freeze(Self::init_reg_mp(definition)),
+            block_mp: Frozen::freeze(Self::init_block_mp(definition)),
         }
     }
 
@@ -211,11 +212,14 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn entry_block(&self) -> regalloc2::Block {
-        self.definition.bid_init.into()
+        *self
+            .block_mp
+            .get_by_left(&self.definition.bid_init)
+            .unwrap()
     }
 
     fn block_insns(&self, block: regalloc2::Block) -> regalloc2::InstRange {
-        let block_id: BlockId = block.into();
+        let block_id: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         let from = self.get_first_instruction(block_id);
         regalloc2::InstRange::forward(
             from,
@@ -227,14 +231,17 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn block_succs(&self, block: regalloc2::Block) -> &[regalloc2::Block] {
-        let block_id: BlockId = block.into();
+        let block_id: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         let block_exit = &self.definition.blocks[&block_id].exit;
-        let v: Vec<regalloc2::Block> = block_exit.walk_jump_bid().map(|x| x.into()).collect();
+        let v: Vec<regalloc2::Block> = block_exit
+            .walk_jump_bid()
+            .map(|x| *self.block_mp.get_by_left(&x).unwrap())
+            .collect();
         v.leak()
     }
 
     fn block_preds(&self, block: regalloc2::Block) -> &[regalloc2::Block] {
-        let bid: BlockId = block.into();
+        let bid: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         self.definition
             .blocks
             .iter()
@@ -243,13 +250,13 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     .walk_jump_args_1()
                     .any(|jump_arg| jump_arg.bid == bid)
             })
-            .map(|(&k, _)| k.into())
+            .map(|(k, _)| *self.block_mp.get_by_left(k).unwrap())
             .collect::<Vec<_>>()
             .leak()
     }
 
     fn block_params(&self, block: regalloc2::Block) -> &[regalloc2::VReg] {
-        let bid: BlockId = block.into();
+        let bid: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         let block = &self.definition.blocks[&bid];
         block
             .phinodes
@@ -295,7 +302,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         succ_idx: usize,
     ) -> &[regalloc2::VReg] {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
-        let block_id_1: BlockId = block.into();
+        let block_id_1: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         assert_eq!(block_id_1, *bid);
         let Yank::BlockExit = yank else {
             unreachable!()
@@ -324,7 +331,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
         match yank {
             Yank::BeforeFirst => {
-                if self.entry_block() == bid.into() {
+                if self.entry_block() == *self.block_mp.get_by_left(&bid).unwrap() {
                     block
                         .phinodes
                         .iter()
