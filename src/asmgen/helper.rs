@@ -95,54 +95,6 @@ impl Into<regalloc2::RegClass> for Dtype {
     }
 }
 
-// to regalloc2::VReg
-impl Into<usize> for RegisterId {
-    fn into(self) -> usize {
-        match self {
-            // RegisterId::Local { aid } => aid << 2,
-            RegisterId::Local { .. } => unreachable!(), // never allocate register for Local
-            // 30 + 32 + 2
-            RegisterId::Arg { bid, aid } => bid.0 << 34 | aid << 2 | 1,
-            RegisterId::Temp { bid, iid } => bid.0 << 34 | iid << 2 | 2,
-        }
-    }
-}
-
-impl From<usize> for RegisterId {
-    fn from(value: usize) -> Self {
-        match value & 0b11 {
-            // 0 => RegisterId::Local { aid: value >> 2 },
-            0 => unreachable!(), // never allocate register for Local
-            1 => {
-                let value = value >> 2;
-                let aid = value & ((1 << 32) - 1);
-                let bid = value >> 32;
-                RegisterId::Arg {
-                    bid: BlockId(bid),
-                    aid,
-                }
-            }
-            2 => {
-                let value = value >> 2;
-                let iid = value & ((1 << 32) - 1);
-                let bid = value >> 32;
-                RegisterId::Temp {
-                    bid: BlockId(bid),
-                    iid,
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl From<regalloc2::VReg> for RegisterId {
-    fn from(value: regalloc2::VReg) -> Self {
-        let index = value.vreg();
-        index.into()
-    }
-}
-
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum Yank {
     BeforeFirst,
@@ -154,10 +106,11 @@ pub struct Gape<'a> {
     definition: &'a FunctionDefinition,
     abi: FunctionAbi,
     inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
+    reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
 }
 
 impl<'a> Gape<'a> {
-    pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
+    fn init_inst_mp(definition: &'a FunctionDefinition) -> BiMap<(BlockId, Yank), regalloc2::Inst> {
         let mut inst_mp: BiMap<(BlockId, Yank), regalloc2::Inst> = BiMap::new();
         let mut insn = regalloc2::Inst::new(0);
 
@@ -177,10 +130,58 @@ impl<'a> Gape<'a> {
                 .unwrap();
             insn = insn.next();
         }
+        inst_mp
+    }
+
+    fn init_reg_mp(definition: &'a FunctionDefinition) -> BiMap<RegisterId, regalloc2::VReg> {
+        let mut reg_mp: BiMap<RegisterId, regalloc2::VReg> = BiMap::new();
+
+        let mut int_index = 0usize;
+        let mut float_index = 0usize;
+
+        for (rid, dtype) in definition
+            .blocks
+            .iter()
+            .flat_map(|(_, b)| b.walk_register())
+            .filter(|(rid, _)| match rid {
+                RegisterId::Local { .. } => false,
+                RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
+            })
+        {
+            match dtype {
+                Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                    match reg_mp.insert_no_overwrite(
+                        rid,
+                        regalloc2::VReg::new(int_index, regalloc2::RegClass::Int),
+                    ) {
+                        Ok(_) => int_index += 1,
+                        Err(_) => {}
+                    }
+                }
+                Dtype::Float { .. } => {
+                    match reg_mp.insert_no_overwrite(
+                        rid,
+                        regalloc2::VReg::new(float_index, regalloc2::RegClass::Float),
+                    ) {
+                        Ok(_) => float_index += 1,
+                        Err(_) => {}
+                    }
+                }
+                Dtype::Array { .. } | Dtype::Unit { .. } | Dtype::Struct { .. } => {}
+                Dtype::Function { .. } => unreachable!(),
+                Dtype::Typedef { .. } => unreachable!(),
+            }
+        }
+
+        reg_mp
+    }
+
+    pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
         Self {
             definition,
             abi,
-            inst_mp: Frozen::freeze(inst_mp),
+            inst_mp: Frozen::freeze(Self::init_inst_mp(definition)),
+            reg_mp: Frozen::freeze(Self::init_reg_mp(definition)),
         }
     }
 
@@ -256,7 +257,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
             .enumerate()
             .map(|(aid, dtype)| {
                 let rid = RegisterId::Arg { bid, aid };
-                regalloc2::VReg::new(rid.into(), dtype.deref().clone().into())
+                *self.reg_mp.get_by_left(&rid).unwrap()
             })
             .collect::<Vec<_>>()
             .leak()
@@ -311,9 +312,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
             .iter()
             .map(|operand| match operand {
                 Operand::Constant(_) => unreachable!(),
-                Operand::Register { rid, dtype } => {
-                    regalloc2::VReg::new((*rid).into(), dtype.clone().into())
-                }
+                Operand::Register { rid, dtype } => *self.reg_mp.get_by_left(&rid).unwrap(),
             })
             .collect::<Vec<_>>()
             .leak()
@@ -341,10 +340,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                     DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
                                 ) => {
                                     let x = regalloc2::Operand::new(
-                                        regalloc2::VReg::new(
-                                            rid.clone().into(),
-                                            dtype.deref().clone().into(),
-                                        ),
+                                        *self.reg_mp.get_by_left(&rid).unwrap(),
                                         regalloc2::OperandConstraint::FixedReg((*reg).into()),
                                         regalloc2::OperandKind::Use,
                                         regalloc2::OperandPos::Early,
@@ -394,7 +390,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                         RegisterId::Local { .. } => None,
                         RegisterId::Arg { .. } | RegisterId::Temp { .. } => {
                             Some(regalloc2::Operand::new(
-                                regalloc2::VReg::new(rid.clone().into(), dtype.clone().into()),
+                                *self.reg_mp.get_by_left(&rid).unwrap(),
                                 regalloc2::OperandConstraint::Any,
                                 regalloc2::OperandKind::Use,
                                 regalloc2::OperandPos::Early,
@@ -412,7 +408,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                         },
                 } => {
                     let x = regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Int),
+                        *self.reg_mp.get_by_left(&rid).unwrap(),
                         regalloc2::OperandConstraint::FixedReg(Register::A0.into()),
                         regalloc2::OperandKind::Use,
                         regalloc2::OperandPos::Early,
@@ -427,7 +423,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                         },
                 } => {
                     let x = regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Float),
+                        *self.reg_mp.get_by_left(&rid).unwrap(),
                         regalloc2::OperandConstraint::FixedReg(Register::FA0.into()),
                         regalloc2::OperandKind::Use,
                         regalloc2::OperandPos::Early,
@@ -455,13 +451,13 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 match instruction.dtype() {
                     Dtype::Unit { .. } => {}
                     Dtype::Int { .. } | Dtype::Pointer { .. } => v.push(regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Int),
+                        *self.reg_mp.get_by_left(&rid).unwrap(),
                         regalloc2::OperandConstraint::Any,
                         regalloc2::OperandKind::Def,
                         regalloc2::OperandPos::Late,
                     )),
                     Dtype::Float { .. } => v.push(regalloc2::Operand::new(
-                        regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Float),
+                        *self.reg_mp.get_by_left(&rid).unwrap(),
                         regalloc2::OperandConstraint::Any,
                         regalloc2::OperandKind::Def,
                         regalloc2::OperandPos::Late,
@@ -481,14 +477,14 @@ impl<'a> regalloc2::Function for Gape<'a> {
                         Dtype::Unit { .. } => unreachable!(),
                         Dtype::Int { .. } | Dtype::Pointer { .. } => {
                             v.push(regalloc2::Operand::new(
-                                regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Int),
+                                *self.reg_mp.get_by_left(&rid).unwrap(),
                                 regalloc2::OperandConstraint::Any,
                                 regalloc2::OperandKind::Use,
                                 regalloc2::OperandPos::Early,
                             ))
                         }
                         Dtype::Float { .. } => v.push(regalloc2::Operand::new(
-                            regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Float),
+                            *self.reg_mp.get_by_left(&rid).unwrap(),
                             regalloc2::OperandConstraint::Any,
                             regalloc2::OperandKind::Use,
                             regalloc2::OperandPos::Early,
