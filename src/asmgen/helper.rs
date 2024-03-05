@@ -178,8 +178,10 @@ impl FunctionDefinition {
     }
 
     fn decode_riddle(&self, riddle: Riddle) -> regalloc2::Inst {
-        let block_id: u16 = riddle.block_id.0.try_into().unwrap();
-        let offset = self.blocks[&riddle.block_id].decode_yank(riddle.yank);
+        let block_id: u32 = riddle.block_id.0.try_into().unwrap();
+        let offset: u32 = self.blocks[&riddle.block_id]
+            .decode_yank(riddle.yank)
+            .into();
         regalloc2::Inst::new(((block_id << 16) | offset).try_into().unwrap())
     }
 
@@ -199,23 +201,14 @@ struct Riddle {
     yank: Yank,
 }
 
-struct Gape<'a> {
+pub struct Gape<'a> {
     definition: &'a FunctionDefinition,
-    source: &'a ir::TranslationUnit,
     abi: FunctionAbi,
 }
 
 impl<'a> Gape<'a> {
-    fn new(
-        definition: &'a FunctionDefinition,
-        source: &'a ir::TranslationUnit,
-        abi: FunctionAbi,
-    ) -> Self {
-        Self {
-            definition,
-            source,
-            abi,
-        }
+    pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
+        Self { definition, abi }
     }
 }
 
