@@ -19,6 +19,7 @@ use ordered_float::OrderedFloat;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::IntoNodeIdentifiers;
+use regalloc2::MachineEnv;
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
@@ -494,7 +495,117 @@ fn translate_function(
 
     // before gen detailed asm::Instruction
     // we need to allocate register first
-    alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
+    // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
+    let gape = helper::Gape::new(definition, function_abi_mp.get(func_name).unwrap().clone());
+    let output = regalloc2::run(
+        &gape,
+        &MachineEnv {
+            preferred_regs_by_class: [
+                vec![
+                    Register::A0.into(),
+                    Register::A1.into(),
+                    Register::A2.into(),
+                    Register::A3.into(),
+                    Register::A4.into(),
+                    Register::A5.into(),
+                ],
+                vec![
+                    Register::FA0.into(),
+                    Register::FA1.into(),
+                    Register::FA2.into(),
+                    Register::FA3.into(),
+                    Register::FA4.into(),
+                    Register::FA5.into(),
+                ],
+                vec![],
+            ],
+            non_preferred_regs_by_class: [
+                // TODO: can we use T5 T6 ?
+                vec![
+                    // Register::T0.into(),
+                    // Register::T1.into(),
+                    // Register::T2.into(),
+                    Register::A6.into(),
+                    Register::A7.into(),
+                    // Register::T3.into(),
+                    // Register::T4.into(),
+                    Register::S2.into(),
+                    Register::S3.into(),
+                    Register::S4.into(),
+                    Register::S5.into(),
+                    Register::S6.into(),
+                    Register::S7.into(),
+                    Register::S8.into(),
+                    Register::S9.into(),
+                    Register::S10.into(),
+                    Register::S11.into(),
+                ],
+                vec![
+                    // Register::FT0.into(),
+                    // Register::FT1.into(),
+                    Register::FT2.into(),
+                    Register::FT3.into(),
+                    Register::FT4.into(),
+                    Register::FT5.into(),
+                    Register::FT6.into(),
+                    Register::FT7.into(),
+                    Register::FA6.into(),
+                    Register::FA7.into(),
+                    Register::FT8.into(),
+                    Register::FT9.into(),
+                    Register::FT10.into(),
+                    Register::FT11.into(),
+                    Register::FS2.into(),
+                    Register::FS3.into(),
+                    Register::FS4.into(),
+                    Register::FS5.into(),
+                    Register::FS6.into(),
+                    Register::FS7.into(),
+                    Register::FS8.into(),
+                    Register::FS9.into(),
+                    Register::FS10.into(),
+                    Register::FS11.into(),
+                ],
+                vec![],
+            ],
+            scratch_by_class: [None, None, None],
+            fixed_stack_slots: vec![],
+        },
+        &regalloc2::RegallocOptions {
+            verbose_log: true,
+            validate_ssa: true,
+        },
+    )
+    .unwrap();
+
+    for i in 0..gape.inst_mp.len() {
+        let insn: regalloc2::Inst = regalloc2::Inst::new(i);
+        let allocations = output
+            .inst_allocs(insn)
+            .iter()
+            .map(|x| x.as_reg().unwrap())
+            .map(|x| x.into())
+            .collect::<Vec<Register>>();
+        let (bid, yank) = gape.inst_mp.get_by_right(&insn).unwrap();
+        let block = &definition.blocks[bid];
+        match yank {
+            helper::Yank::BeforeFirst => {
+                println!("beforefirst {bid} {:?}", allocations);
+            }
+            helper::Yank::Instruction(offset) => {
+                println!("{} {:?}", block.instructions[*offset], allocations);
+            }
+            helper::Yank::BlockExit => {
+                println!("{} {:?}", block.exit, allocations);
+            }
+        }
+    }
+
+    dbg!(gape.reg_mp.len());
+    dbg!(&output);
+
+    // deal with edits later
+    assert!(output.edits.is_empty());
 
     #[allow(clippy::all)]
     for (_, v) in &register_mp {
