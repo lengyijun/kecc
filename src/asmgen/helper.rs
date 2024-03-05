@@ -185,16 +185,6 @@ impl<'a> Gape<'a> {
             block_mp: Frozen::freeze(Self::init_block_mp(definition)),
         }
     }
-
-    fn get_first_instruction(&self, block_id: BlockId) -> regalloc2::Inst {
-        match self.inst_mp.get_by_left(&(block_id, Yank::Instruction(0))) {
-            Some(x) => *x,
-            None => *self
-                .inst_mp
-                .get_by_left(&(block_id, Yank::BlockExit))
-                .unwrap(),
-        }
-    }
 }
 
 impl<'a> regalloc2::Function for Gape<'a> {
@@ -220,13 +210,15 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn block_insns(&self, block: regalloc2::Block) -> regalloc2::InstRange {
         let block_id: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        let from = self.get_first_instruction(block_id);
         regalloc2::InstRange::forward(
-            from,
             *self
                 .inst_mp
-                .get_by_left(&(block_id, Yank::BlockExit))
+                .get_by_left(&(block_id, Yank::BeforeFirst))
                 .unwrap(),
+            self.inst_mp
+                .get_by_left(&(block_id, Yank::BlockExit))
+                .unwrap()
+                .next(),
         )
     }
 
