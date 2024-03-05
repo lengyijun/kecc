@@ -193,6 +193,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
+name = "frozen"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f677be708300866a6ec8ead0c71da49551867dece3fda611113cc52413fd699"
+
+[[package]]
 name = "getrandom"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "bimap",
  "clap",
+ "frozen",
  "hexf-parse",
  "itertools",
  "lang-c",

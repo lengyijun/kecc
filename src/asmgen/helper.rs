@@ -3,11 +3,14 @@ use std::{
     ops::Deref,
 };
 
+use bimap::BiMap;
+use frozen::Frozen;
+
 use crate::{
     asm::{Register, RegisterType},
     asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
-        self, Block, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, Instruction, JumpArg,
+        self, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, Instruction, JumpArg,
         Operand, RegisterId,
     },
 };
@@ -140,75 +143,50 @@ impl From<regalloc2::VReg> for RegisterId {
     }
 }
 
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 enum Yank {
     Instruction(usize),
     BlockExit,
 }
 
-impl Block {
-    fn encode_yank(&self, insn: usize) -> Yank {
-        assert!(insn <= u16::MAX.into());
-        match self.instructions.len().cmp(&insn) {
-            std::cmp::Ordering::Less => unreachable!(),
-            std::cmp::Ordering::Equal => Yank::BlockExit,
-            std::cmp::Ordering::Greater => Yank::Instruction(insn),
-        }
-    }
-
-    fn decode_yank(&self, yank: Yank) -> u16 {
-        let x = match yank {
-            Yank::Instruction(y) => y,
-            Yank::BlockExit => self.instructions.len(),
-        };
-        x.try_into().unwrap()
-    }
-}
-
-impl FunctionDefinition {
-    fn decode_inst(&self, insn: regalloc2::Inst) -> Riddle {
-        self.encode_riddle(insn)
-    }
-
-    fn encode_riddle(&self, insn: regalloc2::Inst) -> Riddle {
-        let value: u32 = insn.raw_u32();
-        let block_id = BlockId((value >> 16).try_into().unwrap());
-        let offset: usize = (value & ((1 << 16) - 1)).try_into().unwrap();
-        let yank = self.blocks[&block_id].encode_yank(offset);
-        Riddle { block_id, yank }
-    }
-
-    fn decode_riddle(&self, riddle: Riddle) -> regalloc2::Inst {
-        let block_id: u32 = riddle.block_id.0.try_into().unwrap();
-        let offset: u32 = self.blocks[&riddle.block_id]
-            .decode_yank(riddle.yank)
-            .into();
-        regalloc2::Inst::new(((block_id << 16) | offset).try_into().unwrap())
-    }
-
-    fn get_first_ridder(&self, block_id: BlockId) -> Riddle {
-        let block = &self.blocks[&block_id];
-        let yank = if block.instructions.is_empty() {
-            Yank::BlockExit
-        } else {
-            Yank::Instruction(0)
-        };
-        Riddle { block_id, yank }
-    }
-}
-
-struct Riddle {
-    block_id: BlockId,
-    yank: Yank,
-}
-
 pub struct Gape<'a> {
     definition: &'a FunctionDefinition,
     abi: FunctionAbi,
+    inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
 }
 
 impl<'a> Gape<'a> {
     pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
-        Self { definition, abi }
+        let mut inst_mp: BiMap<(BlockId, Yank), regalloc2::Inst> = BiMap::new();
+        let mut insn = regalloc2::Inst::new(0);
+
+        for (&bid, block) in &definition.blocks {
+            for offset in 0..block.instructions.len() {
+                inst_mp
+                    .insert_no_overwrite((bid, Yank::Instruction(offset)), insn)
+                    .unwrap();
+                insn = insn.next();
+            }
+            inst_mp
+                .insert_no_overwrite((bid, Yank::BlockExit), insn)
+                .unwrap();
+            insn = insn.next();
+        }
+        Self {
+            definition,
+            abi,
+            inst_mp: Frozen::freeze(inst_mp),
+        }
+    }
+
+    fn get_first_instruction(&self, block_id: BlockId) -> regalloc2::Inst {
+        match self.inst_mp.get_by_left(&(block_id, Yank::Instruction(0))) {
+            Some(x) => *x,
+            None => *self
+                .inst_mp
+                .get_by_left(&(block_id, Yank::BlockExit))
+                .unwrap(),
+        }
     }
 }
 
@@ -231,14 +209,13 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn block_insns(&self, block: regalloc2::Block) -> regalloc2::InstRange {
         let block_id: BlockId = block.into();
-        let from = self.definition.get_first_ridder(block_id);
-        let to = Riddle {
-            block_id,
-            yank: Yank::BlockExit,
-        };
+        let from = self.get_first_instruction(block_id);
         regalloc2::InstRange::forward(
-            self.definition.decode_riddle(from),
-            self.definition.decode_riddle(to),
+            from,
+            *self
+                .inst_mp
+                .get_by_left(&(block_id, Yank::BlockExit))
+                .unwrap(),
         )
     }
 
@@ -280,10 +257,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
-        let riddle = self.definition.decode_inst(insn);
-        match riddle.yank {
+        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
+        match yank {
             Yank::Instruction(_) => false,
-            Yank::BlockExit => match self.definition.blocks[&riddle.block_id].exit {
+            Yank::BlockExit => match self.definition.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
             },
@@ -291,10 +268,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
-        let riddle = self.definition.decode_inst(insn);
-        match riddle.yank {
+        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
+        match yank {
             Yank::Instruction(_) => false,
-            Yank::BlockExit => match self.definition.blocks[&riddle.block_id].exit {
+            Yank::BlockExit => match self.definition.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
                 ir::BlockExit::Switch { .. } => true,
@@ -310,13 +287,13 @@ impl<'a> regalloc2::Function for Gape<'a> {
         insn: regalloc2::Inst,
         succ_idx: usize,
     ) -> &[regalloc2::VReg] {
-        let Riddle { block_id, yank } = self.definition.decode_inst(insn);
+        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         let block_id_1: BlockId = block.into();
-        assert_eq!(block_id_1, block_id);
+        assert_eq!(block_id_1, *bid);
         let Yank::BlockExit = yank else {
             unreachable!()
         };
-        let Some(jump_arg) = self.definition.blocks[&block_id]
+        let Some(jump_arg) = self.definition.blocks[&bid]
             .exit
             .walk_jump_args_1()
             .nth(succ_idx)
@@ -337,10 +314,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn inst_operands(&self, insn: regalloc2::Inst) -> &[regalloc2::Operand] {
-        let Riddle {
-            block_id: bid,
-            yank,
-        } = self.definition.decode_inst(insn);
+        let (bid, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
         let block = &self.definition.blocks[&bid];
 
         match yank {
@@ -515,7 +489,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn inst_clobbers(&self, insn: regalloc2::Inst) -> regalloc2::PRegSet {
-        let Riddle { block_id, yank } = self.definition.decode_inst(insn);
+        let (block_id, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
         let block = &self.definition.blocks[&block_id.into()];
         match yank {
             Yank::Instruction(offset) => match block.instructions[offset].deref() {
