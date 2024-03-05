@@ -3,14 +3,16 @@ use std::{
     ops::Deref,
 };
 
-use regalloc2::Function;
-
 use crate::{
     asm::{Register, RegisterType},
+    asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
-        self, Block, BlockExit, BlockId, Dtype, FunctionDefinition, JumpArg, Operand, RegisterId,
+        self, Block, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, Instruction, JumpArg,
+        Operand, RegisterId,
     },
 };
+
+use super::FunctionAbi;
 
 impl From<regalloc2::Block> for BlockId {
     fn from(value: regalloc2::Block) -> Self {
@@ -94,7 +96,8 @@ impl Into<regalloc2::RegClass> for Dtype {
 impl Into<usize> for RegisterId {
     fn into(self) -> usize {
         match self {
-            RegisterId::Local { aid } => aid << 2,
+            // RegisterId::Local { aid } => aid << 2,
+            RegisterId::Local { .. } => unreachable!(), // never allocate register for Local
             // 30 + 32 + 2
             RegisterId::Arg { bid, aid } => bid.0 << 34 | aid << 2 | 1,
             RegisterId::Temp { bid, iid } => bid.0 << 34 | iid << 2 | 2,
@@ -105,7 +108,8 @@ impl Into<usize> for RegisterId {
 impl From<usize> for RegisterId {
     fn from(value: usize) -> Self {
         match value & 0b11 {
-            0 => RegisterId::Local { aid: value >> 2 },
+            // 0 => RegisterId::Local { aid: value >> 2 },
+            0 => unreachable!(), // never allocate register for Local
             1 => {
                 let value = value >> 2;
                 let aid = value & ((1 << 32) - 1);
@@ -197,11 +201,21 @@ struct Riddle {
 
 struct Gape<'a> {
     definition: &'a FunctionDefinition,
+    source: &'a ir::TranslationUnit,
+    abi: FunctionAbi,
 }
 
 impl<'a> Gape<'a> {
-    fn new(definition: &'a FunctionDefinition) -> Self {
-        Self { definition }
+    fn new(
+        definition: &'a FunctionDefinition,
+        source: &'a ir::TranslationUnit,
+        abi: FunctionAbi,
+    ) -> Self {
+        Self {
+            definition,
+            source,
+            abi,
+        }
     }
 }
 
@@ -330,46 +344,179 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn inst_operands(&self, insn: regalloc2::Inst) -> &[regalloc2::Operand] {
-        let Riddle { block_id : bid, yank } = self.definition.decode_inst(insn);
+        let Riddle {
+            block_id: bid,
+            yank,
+        } = self.definition.decode_inst(insn);
         let block = &self.definition.blocks[&bid];
+
         match yank {
-            Yank::BlockExit => block
-                .exit
-                .walk_operand()
-                .flat_map(|operand| match operand {
-                    Operand::Constant(_) => None,
-                    Operand::Register { rid, dtype } => {
-                        let operand = regalloc2::Operand::new(
+            Yank::BlockExit => match block.exit {
+                BlockExit::Jump { .. }
+                | BlockExit::ConditionalJump { .. }
+                | BlockExit::Switch { .. } => block
+                    .exit
+                    .walk_register()
+                    .map(|(rid, dtype)| {
+                        regalloc2::Operand::new(
                             regalloc2::VReg::new(rid.clone().into(), dtype.clone().into()),
                             regalloc2::OperandConstraint::Any,
                             regalloc2::OperandKind::Use,
                             regalloc2::OperandPos::Early,
-                        );
-                        Some(operand)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .leak(),
-            Yank::Instruction(offset) => {
-                let mut v = Vec::new();
-                if offset == 0 && self.entry_block() == bid.into() {
-                    // visit abi
-                    let x = block
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .leak(),
+
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            rid,
+                            dtype: Dtype::Int { .. } | Dtype::Pointer { .. },
+                        },
+                } => {
+                    let x = regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Int),
+                        regalloc2::OperandConstraint::FixedReg(Register::A0.into()),
+                        regalloc2::OperandKind::Use,
+                        regalloc2::OperandPos::Early,
+                    );
+                    vec![x].leak()
+                }
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            rid,
+                            dtype: Dtype::Float { .. },
+                        },
+                } => {
+                    let x = regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.clone().into(), regalloc2::RegClass::Float),
+                        regalloc2::OperandConstraint::FixedReg(Register::FA0.into()),
+                        regalloc2::OperandKind::Use,
+                        regalloc2::OperandPos::Early,
+                    );
+                    vec![x].leak()
+                }
+                BlockExit::Return {
+                    value:
+                        Operand::Register {
+                            dtype: Dtype::Struct { .. },
+                            ..
+                        },
+                }
+                | BlockExit::Return {
+                    value: Operand::Constant(..),
+                } => &[],
+                BlockExit::Unreachable => unreachable!(),
+                _ => unreachable!(),
+            },
+            Yank::Instruction(iid) => {
+                let instruction: &Instruction = &block.instructions[iid];
+                let mut v: Vec<regalloc2::Operand> = Vec::new();
+                if iid == 0 && self.entry_block() == bid.into() {
+                    let iter = block
                         .phinodes
                         .iter()
+                        .zip(self.abi.params_alloc.iter())
                         .enumerate()
-                        .map(|(aid, dtype)| {
+                        .flat_map(|(aid, (dtype, param_alloc))| {
                             let rid = RegisterId::Arg { bid, aid };
-                            regalloc2::Operand::new(
-                                regalloc2::VReg::new(rid.into(), dtype.deref().clone().into()),
-                                regalloc2::OperandConstraint::Any, // TODO:
+                            match param_alloc {
+                                crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::Direct(RegOrStack::Reg(reg)),
+                                )
+                                | crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
+                                ) => {
+                                    let x = regalloc2::Operand::new(
+                                        regalloc2::VReg::new(
+                                            rid.clone().into(),
+                                            dtype.deref().clone().into(),
+                                        ),
+                                        regalloc2::OperandConstraint::FixedReg((*reg).into()),
+                                        regalloc2::OperandKind::Use,
+                                        regalloc2::OperandPos::Early,
+                                    );
+                                    Some(x)
+                                }
+                                crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::Direct(RegOrStack::Stack { .. }),
+                                )
+                                | crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::InDirect(RegOrStack::Stack { .. }),
+                                ) => None,
+                                crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }),
+                                )
+                                | crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
+                                        ..
+                                    }),
+                                )
+                                | crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure {
+                                        ..
+                                    }),
+                                )
+                                | crate::asmgen::ParamAlloc::PrimitiveType(
+                                    DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure {
+                                        ..
+                                    }),
+                                ) => unreachable!(),
+                                crate::asmgen::ParamAlloc::StructInRegister(_) => None,
+                            }
+                        });
+                    v.extend(iter);
+                }
+
+                let rid = RegisterId::Temp { bid, iid };
+                match instruction.dtype() {
+                    Dtype::Unit { .. } => {}
+                    Dtype::Int { .. } | Dtype::Pointer { .. } => v.push(regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Int),
+                        regalloc2::OperandConstraint::Any,
+                        regalloc2::OperandKind::Def,
+                        regalloc2::OperandPos::Late,
+                    )),
+                    Dtype::Float { .. } => v.push(regalloc2::Operand::new(
+                        regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Float),
+                        regalloc2::OperandConstraint::Any,
+                        regalloc2::OperandKind::Def,
+                        regalloc2::OperandPos::Late,
+                    )),
+
+                    Dtype::Array { .. } => unreachable!(),
+                    Dtype::Struct { .. } => {}
+                    Dtype::Function { .. } => unreachable!(),
+                    Dtype::Typedef { .. } => unreachable!(),
+                }
+
+                for (rid, dtype) in instruction.walk_register() {
+                    match dtype {
+                        Dtype::Unit { .. } => unreachable!(),
+                        Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                            v.push(regalloc2::Operand::new(
+                                regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Int),
+                                regalloc2::OperandConstraint::Any,
                                 regalloc2::OperandKind::Use,
                                 regalloc2::OperandPos::Early,
-                            );
-                        })
-                        .collect::<Vec<_>>();
+                            ))
+                        }
+                        Dtype::Float { .. } => v.push(regalloc2::Operand::new(
+                            regalloc2::VReg::new(rid.into(), regalloc2::RegClass::Float),
+                            regalloc2::OperandConstraint::Any,
+                            regalloc2::OperandKind::Use,
+                            regalloc2::OperandPos::Early,
+                        )),
+                        Dtype::Array { .. } => unreachable!(),
+                        Dtype::Struct { .. } => {}
+                        Dtype::Function { .. } => unreachable!(),
+                        Dtype::Typedef { .. } => unreachable!(),
+                    }
                 }
-                todo!()
+
+                v.leak()
             }
         }
     }
