@@ -934,7 +934,7 @@ fn translate_function(
         init_block.label,
         Some(Label::new(func_name, definition.bid_init))
     );
-    backup_ra_and_init_sp.extend(init_block.instructions.clone());
+    backup_ra_and_init_sp.extend(std::mem::replace(&mut init_block.instructions, Vec::new()));
     init_block.instructions = backup_ra_and_init_sp;
     init_block.label = Some(Label(func_name.to_owned()));
 
