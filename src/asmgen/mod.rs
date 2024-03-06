@@ -938,9 +938,7 @@ fn translate_function(
     init_block.instructions = backup_ra_and_init_sp;
     init_block.label = Some(Label(func_name.to_owned()));
 
-    for b in temp_block.into_iter() {
-        function.blocks.push(b);
-    }
+    function.blocks.extend(temp_block);
 
     function
 }
