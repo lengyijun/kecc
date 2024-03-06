@@ -343,8 +343,8 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                     let x = regalloc2::Operand::new(
                                         *self.reg_mp.get_by_left(&rid).unwrap(),
                                         regalloc2::OperandConstraint::FixedReg((*reg).into()),
-                                        regalloc2::OperandKind::Use,
-                                        regalloc2::OperandPos::Early,
+                                        regalloc2::OperandKind::Def,
+                                        regalloc2::OperandPos::Late,
                                     );
                                     Some(x)
                                 }
