@@ -247,6 +247,9 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn block_params(&self, block: regalloc2::Block) -> &[regalloc2::VReg] {
+        if block == self.entry_block() {
+            return &[];
+        }
         let bid: BlockId = *self.block_mp.get_by_right(&block).unwrap();
         let block = &self.definition.blocks[&bid];
         block
@@ -449,7 +452,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 match instruction.dtype() {
                     Dtype::Unit { .. } => {}
                     Dtype::Int { .. } | Dtype::Pointer { .. } => v.push(regalloc2::Operand::new(
-                        *self.reg_mp.get_by_left(&rid).unwrap(),
+                        *self.reg_mp.get_by_left(&rid).expect(&format!("{rid}")),
                         regalloc2::OperandConstraint::Any,
                         regalloc2::OperandKind::Def,
                         regalloc2::OperandPos::Late,
