@@ -125,8 +125,7 @@ impl<'a> Gape<'a> {
     fn init_reg_mp(definition: &'a FunctionDefinition) -> BiMap<RegisterId, regalloc2::VReg> {
         let mut reg_mp: BiMap<RegisterId, regalloc2::VReg> = BiMap::new();
 
-        let mut int_index = 0usize;
-        let mut float_index = 0usize;
+        let mut index = 0usize;
 
         for (rid, dtype) in definition
             .blocks
@@ -141,18 +140,18 @@ impl<'a> Gape<'a> {
                 Dtype::Int { .. } | Dtype::Pointer { .. } => {
                     match reg_mp.insert_no_overwrite(
                         rid,
-                        regalloc2::VReg::new(int_index, regalloc2::RegClass::Int),
+                        regalloc2::VReg::new(index, regalloc2::RegClass::Int),
                     ) {
-                        Ok(_) => int_index += 1,
+                        Ok(_) => index += 1,
                         Err(_) => {}
                     }
                 }
                 Dtype::Float { .. } => {
                     match reg_mp.insert_no_overwrite(
                         rid,
-                        regalloc2::VReg::new(float_index, regalloc2::RegClass::Float),
+                        regalloc2::VReg::new(index, regalloc2::RegClass::Float),
                     ) {
-                        Ok(_) => float_index += 1,
+                        Ok(_) => index += 1,
                         Err(_) => {}
                     }
                 }
