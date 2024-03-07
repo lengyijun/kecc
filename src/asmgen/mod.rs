@@ -24,6 +24,8 @@ use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
 
+use self::helper::{edit_2_instruction, Gape, Yank};
+
 static INT_OFFSETS: [(Register, i64); 12] = [
     (Register::S0, 16),
     (Register::S1, 24),
@@ -227,29 +229,7 @@ fn translate_function(
             aid,
         };
         match alloc {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
-                match dtype {
-                    ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                        let None = register_mp.insert(
-                            register_id,
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { src: Some(*reg) }),
-                        ) else {
-                            unreachable!()
-                        };
-                    }
-                    ir::Dtype::Float { .. } => {
-                        let None = register_mp.insert(
-                            register_id,
-                            DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
-                                src: Some(*reg),
-                            }),
-                        ) else {
-                            unreachable!()
-                        };
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {}
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
@@ -264,12 +244,6 @@ fn translate_function(
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
                 // must be a struct
-                let None = register_mp.insert(
-                    register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { src: Some(*reg) }),
-                ) else {
-                    unreachable!()
-                };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
@@ -414,62 +388,13 @@ fn translate_function(
         };
     }
 
-    for (&bid, block) in definition
-        .blocks
-        .iter()
-        .filter(|(&bid, _)| bid != definition.bid_init)
-    {
-        for (aid, dtype) in block.phinodes.iter().enumerate() {
-            match &**dtype {
-                ir::Dtype::Unit { .. } => unreachable!(),
-                ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                    let None = register_mp.insert(
-                        RegisterId::Arg { bid, aid },
-                        DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { src: None }),
-                    ) else {
-                        unreachable!()
-                    };
-                }
-                ir::Dtype::Float { .. } => {
-                    let None = register_mp.insert(
-                        RegisterId::Arg { bid, aid },
-                        DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { src: None }),
-                    ) else {
-                        unreachable!()
-                    };
-                }
-                ir::Dtype::Array { .. } => unreachable!(),
-                ir::Dtype::Struct { .. } => {
-                    // if necessary, alloc on stack
-                    unreachable!()
-                }
-                ir::Dtype::Function { .. } => unreachable!(),
-                ir::Dtype::Typedef { .. } => unreachable!(),
-            }
-        }
-    }
-
     for (&bid, block) in definition.blocks.iter() {
         for (iid, instr) in block.instructions.iter().enumerate() {
             let dtype = instr.dtype();
             match &dtype {
                 ir::Dtype::Unit { .. } => {}
-                ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                    let None = register_mp.insert(
-                        RegisterId::Temp { bid, iid },
-                        DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { src: None }),
-                    ) else {
-                        unreachable!()
-                    };
-                }
-                ir::Dtype::Float { .. } => {
-                    let None = register_mp.insert(
-                        RegisterId::Temp { bid, iid },
-                        DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { src: None }),
-                    ) else {
-                        unreachable!()
-                    };
-                }
+                ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {}
+                ir::Dtype::Float { .. } => {}
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => {
                     let (size, align) = dtype.size_align_of(&source.structs).unwrap();
@@ -578,6 +503,7 @@ fn translate_function(
     )
     .unwrap();
 
+    /*
     for i in 0..gape.inst_mp.len() {
         let insn: regalloc2::Inst = regalloc2::Inst::new(i);
         let allocations = output
@@ -603,81 +529,71 @@ fn translate_function(
 
     dbg!(gape.reg_mp.len());
     dbg!(&output);
+     */
 
-    // deal with edits later
-    assert!(output.edits.is_empty());
-
-    #[allow(clippy::all)]
-    for (_, v) in &register_mp {
-        match v {
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })
-            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })
-            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => unreachable!(),
-            _ => {}
-        }
-    }
-
-    let mut register_remap: Vec<(Register, Register, ir::Dtype)> = vec![];
-    for (aid, (alloc, dtype)) in izip!(params, &signature.params).enumerate() {
-        let register_id = RegisterId::Arg {
-            bid: definition.bid_init,
-            aid,
-        };
-        match (alloc, register_mp.get(&register_id).unwrap()) {
-            (
-                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))),
-                DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-            ) => {
-                alloc_arg.extend(mk_stype(
-                    SType::store(dtype.clone()),
-                    Register::S0,
-                    *reg,
-                    *offset_to_s0 as u64,
-                ));
-            }
-            (
-                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(_))),
-                DirectOrInDirect::InDirect(RegOrStack::Stack { .. }),
-            ) => {
-                unreachable!()
-            }
-            (
-                ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
-                DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }),
-            ) => {
-                alloc_arg.extend(mk_stype(
-                    SType::SD,
-                    Register::S0,
-                    *reg,
-                    *offset_to_s0 as u64,
-                ));
-            }
-            (
-                // register to stack
-                ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(_))),
-                DirectOrInDirect::Direct(RegOrStack::Stack { .. }),
-            ) => {
-                unreachable!()
-            }
-
-            (
-                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(origin_reg))),
-                DirectOrInDirect::Direct(RegOrStack::Reg(target_reg)),
-            )
-            | (
-                ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(origin_reg))),
-                DirectOrInDirect::InDirect(RegOrStack::Reg(target_reg)),
-            ) => {
-                if target_reg != origin_reg {
-                    register_remap.push((*origin_reg, *target_reg, dtype.clone()));
+    /*
+        // deal with edit in Output
+        let mut register_remap: Vec<(Register, Register, ir::Dtype)> = vec![];
+        for (aid, (alloc, dtype)) in izip!(params, &signature.params).enumerate() {
+            let register_id = RegisterId::Arg {
+                bid: definition.bid_init,
+                aid,
+            };
+            match (alloc, register_mp.get(&register_id).unwrap()) {
+                (
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))),
+                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
+                ) => {
+                    alloc_arg.extend(mk_stype(
+                        SType::store(dtype.clone()),
+                        Register::S0,
+                        *reg,
+                        *offset_to_s0 as u64,
+                    ));
                 }
-            }
-            _ => {}
-        }
-    }
+                (
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(_))),
+                    DirectOrInDirect::InDirect(RegOrStack::Stack { .. }),
+                ) => {
+                    unreachable!()
+                }
+                (
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
+                    DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }),
+                ) => {
+                    alloc_arg.extend(mk_stype(
+                        SType::SD,
+                        Register::S0,
+                        *reg,
+                        *offset_to_s0 as u64,
+                    ));
+                }
+                (
+                    // register to stack
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(_))),
+                    DirectOrInDirect::Direct(RegOrStack::Stack { .. }),
+                ) => {
+                    unreachable!()
+                }
 
-    alloc_arg.extend(cp_parallel(register_remap));
+                (
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(origin_reg))),
+                    DirectOrInDirect::Direct(RegOrStack::Reg(target_reg)),
+                )
+                | (
+                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(origin_reg))),
+                    DirectOrInDirect::InDirect(RegOrStack::Reg(target_reg)),
+                ) => {
+                    if target_reg != origin_reg {
+                        register_remap.push((*origin_reg, *target_reg, dtype.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        alloc_arg.extend(cp_parallel(register_remap));
+    */
 
     // the stack pointer is always kept 16-byte aligned
     while stack_offset_2_s0 % 16 != 0 {
@@ -697,6 +613,8 @@ fn translate_function(
             source,
             function_abi_mp,
             float_mp,
+            &gape,
+            &output,
         );
         function.blocks.push(asm::Block {
             label: Some(Label::new(func_name, bid)),
@@ -1546,14 +1464,108 @@ fn translate_block(
     bid: BlockId,
     block: &ir::Block,
     temp_block: &mut Vec<asm::Block>,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     float_mp: &mut FloatMp,
+    gape: &Gape<'_>,
+    output: &regalloc2::Output,
 ) -> Vec<asm::Instruction> {
     let mut res = vec![];
 
-    for (iid, instr) in block.instructions.iter().enumerate() {
+    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BeforeFirst)).unwrap();
+    let edits = output
+        .edits
+        .iter()
+        .filter_map(|(prog_point, edit)| {
+            if *prog_point == regalloc2::ProgPoint::before(insn) {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .flat_map(edit_2_instruction);
+    res.extend(edits);
+
+    let edits = output
+        .edits
+        .iter()
+        .filter_map(|(prog_point, edit)| {
+            if *prog_point == regalloc2::ProgPoint::after(insn) {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .flat_map(edit_2_instruction);
+    res.extend(edits);
+
+    'instr_loop: for (iid, instr) in block.instructions.iter().enumerate() {
+        let rid = RegisterId::Temp { bid, iid };
+        let insn = *gape
+            .inst_mp
+            .get_by_left(&(bid, Yank::Instruction(iid)))
+            .unwrap();
+
+        let mut allocations = output
+            .inst_allocs(
+                *gape
+                    .inst_mp
+                    .get_by_left(&(bid, Yank::Instruction(iid)))
+                    .unwrap(),
+            )
+            .iter()
+            .map(|x| x.as_reg().unwrap())
+            .map(<regalloc2::PReg as Into<Register>>::into);
+
+        // update register_mp
+        match instr.dtype() {
+            ir::Dtype::Unit { .. } => {}
+            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
+                let reg = match allocations.next() {
+                    Some(reg) => reg,
+                    None => continue 'instr_loop,
+                };
+                let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
+            }
+            ir::Dtype::Array { .. } => unreachable!(),
+            ir::Dtype::Struct { .. } => {}
+            ir::Dtype::Function { .. } => unreachable!(),
+            ir::Dtype::Typedef { .. } => unreachable!(),
+        }
+
+        for (rid, dtype) in instr.walk_register().filter(|(rid, _)| match rid {
+            RegisterId::Local { .. } => false,
+            RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
+        }) {
+            match dtype {
+                ir::Dtype::Unit { .. } => {}
+                ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. } => {
+                    let _ = register_mp.insert(
+                        rid,
+                        DirectOrInDirect::Direct(RegOrStack::Reg(allocations.next().unwrap())),
+                    );
+                }
+                ir::Dtype::Array { .. } => unreachable!(),
+                ir::Dtype::Struct { .. } => {}
+                ir::Dtype::Function { .. } => unreachable!(),
+                ir::Dtype::Typedef { .. } => unreachable!(),
+            }
+        }
+
+        let edits = output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::before(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(edit_2_instruction);
+        res.extend(edits);
+
         match &**instr {
             ir::Instruction::UnaryOp {
                 op,
@@ -4693,7 +4705,34 @@ fn translate_block(
             ir::Instruction::Nop => {}
             _ => unreachable!("{:?}", &**instr),
         }
+
+        let edits = output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::after(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(edit_2_instruction);
+        res.extend(edits);
     }
+
+    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockExit)).unwrap();
+    let edits = output
+        .edits
+        .iter()
+        .filter_map(|(prog_point, edit)| {
+            if *prog_point == regalloc2::ProgPoint::before(insn) {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .flat_map(edit_2_instruction);
+    res.extend(edits);
 
     match &block.exit {
         ir::BlockExit::Jump { arg } => {
@@ -4812,6 +4851,19 @@ fn translate_block(
         }
         ir::BlockExit::Unreachable => unreachable!(),
     }
+
+    let edits = output
+        .edits
+        .iter()
+        .filter_map(|(prog_point, edit)| {
+            if *prog_point == regalloc2::ProgPoint::after(insn) {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .flat_map(edit_2_instruction);
+    res.extend(edits);
 
     res
 }

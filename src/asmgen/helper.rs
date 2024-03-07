@@ -7,11 +7,10 @@ use bimap::BiMap;
 use frozen::Frozen;
 
 use crate::{
-    asm::{Register, RegisterType},
+    asm::{self, Pseudo, Register, RegisterType},
     asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
-        self, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, Instruction, JumpArg,
-        Operand, RegisterId,
+        self, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand, RegisterId,
     },
 };
 
@@ -445,18 +444,26 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 _ => unreachable!(),
             },
             Yank::Instruction(iid) => {
-                let instruction: &Instruction = &block.instructions[iid];
+                let instruction: &ir::Instruction = &block.instructions[iid];
                 let mut v: Vec<regalloc2::Operand> = Vec::new();
 
                 let rid = RegisterId::Temp { bid, iid };
                 match instruction.dtype() {
                     Dtype::Unit { .. } => {}
-                    Dtype::Int { .. } | Dtype::Pointer { .. } => v.push(regalloc2::Operand::new(
-                        *self.reg_mp.get_by_left(&rid).expect(&format!("{rid}")),
-                        regalloc2::OperandConstraint::Any,
-                        regalloc2::OperandKind::Def,
-                        regalloc2::OperandPos::Late,
-                    )),
+                    Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                        match self.reg_mp.get_by_left(&rid) {
+                            Some(dest) => v.push(regalloc2::Operand::new(
+                                *dest,
+                                regalloc2::OperandConstraint::Any,
+                                regalloc2::OperandKind::Def,
+                                regalloc2::OperandPos::Late,
+                            )),
+                            None => {
+                                // result never used
+                                return &[];
+                            }
+                        }
+                    }
                     Dtype::Float { .. } => v.push(regalloc2::Operand::new(
                         *self.reg_mp.get_by_left(&rid).unwrap(),
                         regalloc2::OperandConstraint::Any,
