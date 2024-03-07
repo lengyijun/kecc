@@ -593,3 +593,23 @@ impl BlockExit {
         }
     }
 }
+
+pub fn edit_2_instruction(edit: &regalloc2::Edit) -> Vec<asm::Instruction> {
+    match edit {
+        regalloc2::Edit::Move { from, to } => match (from.kind(), to.kind()) {
+            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::None) => todo!(),
+            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Reg) => todo!(),
+            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Stack) => todo!(),
+            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::None) => todo!(),
+            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Reg) => {
+                let rs = from.as_reg().unwrap().into();
+                let rd = to.as_reg().unwrap().into();
+                vec![asm::Instruction::Pseudo(Pseudo::Mv { rd, rs })]
+            }
+            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Stack) => todo!(),
+            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::None) => todo!(),
+            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
+            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
+        },
+    }
+}
