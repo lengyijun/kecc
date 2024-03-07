@@ -162,7 +162,7 @@ impl HasDtype for FunctionSignature {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDefinition {
     /// Memory allocations for local variables.  The allocation is performed at the beginning of a
     /// function invocation.
