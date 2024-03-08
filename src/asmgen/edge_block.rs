@@ -92,10 +92,7 @@ impl Gape {
                             temp_bid,
                         ),
                     ));
-                    *jump_arg = JumpArg {
-                        bid: temp_bid,
-                        args: Vec::new(),
-                    };
+                    jump_arg.bid = temp_bid;
                 }
                 for (bid, block) in v {
                     let None = self.blocks.insert(bid, block) else {
