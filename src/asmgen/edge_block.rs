@@ -1,9 +1,7 @@
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashMap},
+use crate::{
+    ir::{Block, BlockId, JumpArg},
+    SimplifyCfgReach,
 };
-
-use crate::ir::{Block, BlockExit, BlockId, JumpArg};
 
 use super::helper::Gape;
 
@@ -45,6 +43,8 @@ impl Gape {
                         unreachable!()
                     };
                 }
+                // remove unreachable blocks
+                let _ = SimplifyCfgReach::optimize_inner(self.bid_init, &mut self.blocks);
                 self = Self::new(self.blocks, self.bid_init, self.abi);
             } else {
                 return self;
