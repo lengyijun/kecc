@@ -470,6 +470,16 @@ impl Block {
         Box::new(self.walk_operand().filter_map(f))
     }
 
+    pub fn walk_register_mut<'a>(
+        &'a mut self,
+    ) -> Box<dyn Iterator<Item = &'a mut RegisterId> + 'a> {
+        let f = |operand: &'a mut Operand| match operand {
+            Operand::Constant(_) => None,
+            Operand::Register { rid, .. } => Some(rid),
+        };
+        Box::new(self.walk_operand_mut().filter_map(f))
+    }
+
     pub fn walk_int_register(&self) -> Box<dyn Iterator<Item = RegisterId> + '_> {
         let f = |operand: &Operand| match operand {
             Operand::Register {
