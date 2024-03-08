@@ -20,6 +20,38 @@ pub struct SimplifyCfgConstProp {}
 #[derive(Default, Clone, Copy, Debug)]
 pub struct SimplifyCfgReach {}
 
+impl SimplifyCfgReach {
+    pub fn optimize_inner(bid_init: BlockId, blocks: &mut BTreeMap<BlockId, Block>) -> bool {
+        let mut queue: VecDeque<BlockId> = VecDeque::new();
+        queue.push_back(bid_init);
+        let mut set: HashSet<BlockId> = HashSet::new();
+
+        while let Some(bid) = queue.pop_front() {
+            if !set.insert(bid) {
+                continue;
+            }
+
+            for bid in blocks.get(&bid).unwrap().exit.walk_jump_bid() {
+                queue.push_back(bid);
+            }
+        }
+
+        let unreachable_bids = blocks
+            .keys()
+            .filter(|bid| !set.contains(bid))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unreachable_bids.is_empty() {
+            return false;
+        }
+
+        for bid in unreachable_bids {
+            let _x = blocks.remove(&bid).unwrap();
+        }
+        true
+    }
+}
+
 /// Merges two blocks if a block is pointed to only by another
 #[derive(Default, Clone, Copy, Debug)]
 pub struct SimplifyCfgMerge {}
@@ -96,46 +128,7 @@ impl Optimize<FunctionDefinition> for SimplifyCfgConstProp {
 
 impl Optimize<FunctionDefinition> for SimplifyCfgReach {
     fn optimize(&mut self, code: &mut FunctionDefinition) -> bool {
-        let mut queue: VecDeque<BlockId> = VecDeque::new();
-        queue.push_back(code.bid_init);
-        let mut set: HashSet<BlockId> = HashSet::new();
-
-        while let Some(bid) = queue.pop_front() {
-            if !set.insert(bid) {
-                continue;
-            }
-            match &code.blocks.get(&bid).unwrap().exit {
-                BlockExit::Jump { arg } => queue.push_back(arg.bid),
-                BlockExit::ConditionalJump {
-                    arg_then, arg_else, ..
-                } => {
-                    queue.push_back(arg_then.bid);
-                    queue.push_back(arg_else.bid);
-                }
-                BlockExit::Switch { cases, default, .. } => {
-                    for (_, jump_arg) in cases {
-                        queue.push_back(jump_arg.bid);
-                    }
-                    queue.push_back(default.bid);
-                }
-                BlockExit::Return { .. } | BlockExit::Unreachable => {}
-            }
-        }
-
-        let unreachable_bids = code
-            .blocks
-            .keys()
-            .filter(|bid| !set.contains(bid))
-            .cloned()
-            .collect::<Vec<_>>();
-        if unreachable_bids.is_empty() {
-            return false;
-        }
-
-        for bid in unreachable_bids {
-            let _x = code.blocks.remove(&bid).unwrap();
-        }
-        true
+        Self::optimize_inner(code.bid_init, &mut code.blocks)
     }
 }
 
