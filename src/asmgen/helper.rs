@@ -90,6 +90,7 @@ pub enum Yank {
     BlockExit,
 }
 
+#[derive(Debug)]
 pub struct Gape {
     /// copy from `FunctionDefinition`
     pub blocks: BTreeMap<BlockId, ir::Block>,
