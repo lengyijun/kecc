@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::DerefMut;
 
 use crate::ir::*;
@@ -477,17 +477,24 @@ impl FunctionDefinition {
         order
     }
 
-    pub fn calculate_pred(&self) -> HashMap<BlockId, HashSet<BlockId>> {
+    pub fn calculate_pred_inner(
+        blocks: &BTreeMap<BlockId, Block>,
+        bid_init: BlockId,
+    ) -> HashMap<BlockId, HashSet<BlockId>> {
         let mut hm: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-        for (&id, b) in &self.blocks {
+        for (&id, b) in blocks {
             for next_id in b.exit.walk_jump_bid() {
                 let _b = hm.entry(next_id).or_default().insert(id);
             }
         }
-        let None = hm.insert(self.bid_init, HashSet::new()) else {
+        let None = hm.insert(bid_init, HashSet::new()) else {
             unreachable!()
         };
         hm
+    }
+
+    pub fn calculate_pred(&self) -> HashMap<BlockId, HashSet<BlockId>> {
+        Self::calculate_pred_inner(&self.blocks, self.bid_init)
     }
 
     pub fn dom_tree(&self) -> HashMap<BlockId, Vec<BlockId>> {
