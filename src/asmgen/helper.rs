@@ -602,6 +602,19 @@ impl BlockExit {
             Self::Return { .. } | Self::Unreachable => Box::new(empty()),
         }
     }
+
+    pub fn walk_jump_args_mut(&mut self) -> Box<dyn Iterator<Item = &mut JumpArg> + '_> {
+        match self {
+            Self::Jump { arg } => Box::new(once(arg)),
+            Self::ConditionalJump {
+                arg_then, arg_else, ..
+            } => Box::new(once(arg_then).chain(once(arg_else))),
+            Self::Switch { default, cases, .. } => {
+                Box::new(once(default).chain(cases.iter_mut().map(|x| &mut x.1)))
+            }
+            Self::Return { .. } | Self::Unreachable => Box::new(empty()),
+        }
+    }
 }
 
 pub fn edit_2_instruction(edit: &regalloc2::Edit) -> Vec<asm::Instruction> {
