@@ -101,6 +101,7 @@ pub struct Gape {
     pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
+    pub constant_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
 }
 
 impl Gape {
@@ -191,16 +192,67 @@ impl Gape {
         block_mp
     }
 
+    fn init_constant_mp(
+        blocks: &BTreeMap<BlockId, ir::Block>,
+        mut virt_reg: usize,
+    ) -> BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>> {
+        blocks
+            .iter()
+            .map(|(bid, bb)| {
+                let vv = bb
+                    .exit
+                    .walk_jump_args_1()
+                    .map(|jump_arg| {
+                        jump_arg
+                            .args
+                            .iter()
+                            .flat_map(|operand| match operand {
+                                Operand::Constant(c) => match c {
+                                    ir::Constant::Undef { .. } => unreachable!(),
+                                    ir::Constant::Unit => unreachable!(),
+                                    ir::Constant::Int { .. } => {
+                                        let x = Some(regalloc2::VReg::new(
+                                            virt_reg,
+                                            regalloc2::RegClass::Int,
+                                        ));
+                                        virt_reg += 1;
+                                        x
+                                    }
+                                    ir::Constant::Float { .. } => {
+                                        let x = Some(regalloc2::VReg::new(
+                                            virt_reg,
+                                            regalloc2::RegClass::Float,
+                                        ));
+                                        virt_reg += 1;
+                                        x
+                                    }
+                                    ir::Constant::GlobalVariable { .. } => {
+                                        unreachable!()
+                                    }
+                                },
+                                Operand::Register { .. } => None,
+                            })
+                            .collect()
+                    })
+                    .collect();
+                (*bid, vv)
+            })
+            .collect()
+    }
+
     pub fn from_definition(definition: &FunctionDefinition, abi: FunctionAbi) -> Self {
         Self::new(definition.blocks.clone(), definition.bid_init, abi)
     }
 
     pub fn new(blocks: BTreeMap<BlockId, ir::Block>, bid_init: BlockId, abi: FunctionAbi) -> Self {
+        let reg_mp = Frozen::freeze(Self::init_reg_mp(&blocks));
+
         Self {
             bid_init,
             abi,
+            constant_mp: Frozen::freeze(Self::init_constant_mp(&blocks, reg_mp.len())),
+            reg_mp,
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
-            reg_mp: Frozen::freeze(Self::init_reg_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
             pred_mp: Frozen::freeze(
                 FunctionDefinition::calculate_pred_inner(&blocks, bid_init)
@@ -324,11 +376,12 @@ impl regalloc2::Function for Gape {
         let Some(jump_arg) = self.blocks[&bid].exit.walk_jump_args_1().nth(succ_idx) else {
             unreachable!()
         };
+        let mut constant_mp = self.constant_mp[&block_id_1][succ_idx].iter();
         jump_arg
             .args
             .iter()
             .map(|operand| match operand {
-                Operand::Constant(_) => unreachable!(),
+                Operand::Constant(_) => *constant_mp.next().unwrap(),
                 Operand::Register { rid, dtype } => *self.reg_mp.get_by_left(&rid).unwrap(),
             })
             .collect::<Vec<_>>()
