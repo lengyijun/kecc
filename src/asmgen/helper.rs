@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     iter::{empty, once},
     ops::Deref,
 };
@@ -89,20 +90,26 @@ pub enum Yank {
     BlockExit,
 }
 
-pub struct Gape<'a> {
-    definition: &'a FunctionDefinition,
-    abi: FunctionAbi,
+pub struct Gape {
+    /// copy from `FunctionDefinition`
+    pub blocks: BTreeMap<BlockId, ir::Block>,
+    pub bid_init: BlockId,
+
+    pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
+    pub abi: FunctionAbi,
     pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
-    block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
+    pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
 }
 
-impl<'a> Gape<'a> {
-    fn init_inst_mp(definition: &'a FunctionDefinition) -> BiMap<(BlockId, Yank), regalloc2::Inst> {
+impl Gape {
+    fn init_inst_mp(
+        blocks: &BTreeMap<BlockId, ir::Block>,
+    ) -> BiMap<(BlockId, Yank), regalloc2::Inst> {
         let mut inst_mp: BiMap<(BlockId, Yank), regalloc2::Inst> = BiMap::new();
         let mut insn = regalloc2::Inst::new(0);
 
-        for (&bid, block) in &definition.blocks {
+        for (&bid, block) in blocks {
             inst_mp
                 .insert_no_overwrite((bid, Yank::BeforeFirst), insn)
                 .unwrap();
@@ -121,13 +128,12 @@ impl<'a> Gape<'a> {
         inst_mp
     }
 
-    fn init_reg_mp(definition: &'a FunctionDefinition) -> BiMap<RegisterId, regalloc2::VReg> {
+    fn init_reg_mp(blocks: &BTreeMap<BlockId, ir::Block>) -> BiMap<RegisterId, regalloc2::VReg> {
         let mut reg_mp: BiMap<RegisterId, regalloc2::VReg> = BiMap::new();
 
         let mut index = 0usize;
 
-        for (rid, dtype) in definition
-            .blocks
+        for (rid, dtype) in blocks
             .iter()
             .flat_map(|(_, b)| b.walk_register())
             .filter(|(rid, _)| match rid {
@@ -163,32 +169,42 @@ impl<'a> Gape<'a> {
         reg_mp
     }
 
-    fn init_block_mp(definition: &'a FunctionDefinition) -> BiMap<BlockId, regalloc2::Block> {
+    fn init_block_mp(blocks: &BTreeMap<BlockId, ir::Block>) -> BiMap<BlockId, regalloc2::Block> {
         let mut block_mp: BiMap<BlockId, regalloc2::Block> = BiMap::new();
         let mut block = regalloc2::Block::new(0);
 
-        for bid in definition.blocks.keys() {
+        for bid in blocks.keys() {
             block_mp.insert_no_overwrite(*bid, block).unwrap();
             block = block.next()
         }
         block_mp
     }
 
-    pub fn from_definition(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
+    pub fn from_definition(definition: &FunctionDefinition, abi: FunctionAbi) -> Self {
+        Self::new(definition.blocks.clone(), definition.bid_init, abi)
+    }
+
+    pub fn new(blocks: BTreeMap<BlockId, ir::Block>, bid_init: BlockId, abi: FunctionAbi) -> Self {
         Self {
-            definition,
+            bid_init,
             abi,
-            inst_mp: Frozen::freeze(Self::init_inst_mp(definition)),
-            reg_mp: Frozen::freeze(Self::init_reg_mp(definition)),
-            block_mp: Frozen::freeze(Self::init_block_mp(definition)),
+            inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
+            reg_mp: Frozen::freeze(Self::init_reg_mp(&blocks)),
+            block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
+            pred_mp: Frozen::freeze(
+                FunctionDefinition::calculate_pred_inner(&blocks, bid_init)
+                    .into_iter()
+                    .map(|(x, y)| (x, y.into_iter().collect()))
+                    .collect(),
+            ),
+            blocks,
         }
     }
 }
 
-impl<'a> regalloc2::Function for Gape<'a> {
+impl regalloc2::Function for Gape {
     fn num_insts(&self) -> usize {
-        self.definition
-            .blocks
+        self.blocks
             .values()
             .map(|b| b.instructions.len() + 1 + 1) // + 1 : blockexit
             // +1 : BeforeFirst
@@ -196,14 +212,11 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn num_blocks(&self) -> usize {
-        self.definition.blocks.len()
+        self.blocks.len()
     }
 
     fn entry_block(&self) -> regalloc2::Block {
-        *self
-            .block_mp
-            .get_by_left(&self.definition.bid_init)
-            .unwrap()
+        *self.block_mp.get_by_left(&self.bid_init).unwrap()
     }
 
     fn block_insns(&self, block: regalloc2::Block) -> regalloc2::InstRange {
@@ -222,7 +235,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn block_succs(&self, block: regalloc2::Block) -> &[regalloc2::Block] {
         let block_id: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        let block_exit = &self.definition.blocks[&block_id].exit;
+        let block_exit = &self.blocks[&block_id].exit;
         let v: Vec<regalloc2::Block> = block_exit
             .walk_jump_bid()
             .map(|x| *self.block_mp.get_by_left(&x).unwrap())
@@ -232,15 +245,12 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn block_preds(&self, block: regalloc2::Block) -> &[regalloc2::Block] {
         let bid: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        self.definition
-            .blocks
+        self.pred_mp
+            .get(&bid)
+            .map(Deref::deref)
+            .unwrap_or_default()
             .iter()
-            .filter(|(_, v)| {
-                v.exit
-                    .walk_jump_args_1()
-                    .any(|jump_arg| jump_arg.bid == bid)
-            })
-            .map(|(k, _)| *self.block_mp.get_by_left(k).unwrap())
+            .map(|k| *self.block_mp.get_by_left(k).unwrap())
             .collect::<Vec<_>>()
             .leak()
     }
@@ -250,7 +260,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
             return &[];
         }
         let bid: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        let block = &self.definition.blocks[&bid];
+        let block = &self.blocks[&bid];
         block
             .phinodes
             .iter()
@@ -267,7 +277,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
             Yank::BeforeFirst | Yank::Instruction(_) => false,
-            Yank::BlockExit => match self.definition.blocks[&bid].exit {
+            Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
             },
@@ -278,7 +288,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
             Yank::BeforeFirst | Yank::Instruction(_) => false,
-            Yank::BlockExit => match self.definition.blocks[&bid].exit {
+            Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
                 ir::BlockExit::Switch { .. } => true,
@@ -300,11 +310,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         let Yank::BlockExit = yank else {
             unreachable!()
         };
-        let Some(jump_arg) = self.definition.blocks[&bid]
-            .exit
-            .walk_jump_args_1()
-            .nth(succ_idx)
-        else {
+        let Some(jump_arg) = self.blocks[&bid].exit.walk_jump_args_1().nth(succ_idx) else {
             unreachable!()
         };
         jump_arg
@@ -320,7 +326,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn inst_operands(&self, insn: regalloc2::Inst) -> &[regalloc2::Operand] {
         let (bid, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
-        let block = &self.definition.blocks[&bid];
+        let block = &self.blocks[&bid];
 
         match yank {
             Yank::BeforeFirst => {
@@ -511,7 +517,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
 
     fn inst_clobbers(&self, insn: regalloc2::Inst) -> regalloc2::PRegSet {
         let (block_id, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
-        let block = &self.definition.blocks[&block_id.into()];
+        let block = &self.blocks[&block_id.into()];
         match yank {
             Yank::Instruction(offset) => match block.instructions[offset].deref() {
                 ir::Instruction::TypeCast { .. }
@@ -569,12 +575,9 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn num_vregs(&self) -> usize {
-        self.definition
-            .blocks
+        self.blocks
             .values()
-            .fold(self.definition.allocations.len(), |acc, b| {
-                acc + b.instructions.len() + b.phinodes.len()
-            })
+            .fold(0, |acc, b| acc + b.instructions.len() + b.phinodes.len())
     }
 
     fn spillslot_size(&self, regclass: regalloc2::RegClass) -> usize {

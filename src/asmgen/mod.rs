@@ -1468,7 +1468,7 @@ fn translate_block(
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     float_mp: &mut FloatMp,
-    gape: &Gape<'_>,
+    gape: &Gape,
     output: &regalloc2::Output,
 ) -> Vec<asm::Instruction> {
     let mut res = vec![];
