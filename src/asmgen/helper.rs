@@ -148,7 +148,7 @@ impl Gape {
                         rid,
                         regalloc2::VReg::new(index, regalloc2::RegClass::Int),
                     ) {
-                        Ok(_) => index += 1,
+                        Ok(()) => index += 1,
                         Err(_) => {}
                     }
                 }
@@ -157,7 +157,7 @@ impl Gape {
                         rid,
                         regalloc2::VReg::new(index, regalloc2::RegClass::Float),
                     ) {
-                        Ok(_) => index += 1,
+                        Ok(()) => index += 1,
                         Err(_) => {}
                     }
                 }
