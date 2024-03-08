@@ -174,7 +174,7 @@ impl<'a> Gape<'a> {
         block_mp
     }
 
-    pub fn new(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
+    pub fn from_definition(definition: &'a FunctionDefinition, abi: FunctionAbi) -> Self {
         Self {
             definition,
             abi,
