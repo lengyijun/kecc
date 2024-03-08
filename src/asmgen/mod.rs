@@ -5763,7 +5763,7 @@ enum DirectOrInDirect<T: Clone + Copy> {
     InDirect(T),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct FunctionAbi {
     params_alloc: Vec<ParamAlloc>,
     /// contain the ret_alloc
