@@ -134,14 +134,24 @@ impl Gape {
 
         let mut index = 0usize;
 
-        for (rid, dtype) in blocks
-            .iter()
-            .flat_map(|(_, b)| b.walk_register())
-            .filter(|(rid, _)| match rid {
-                RegisterId::Local { .. } => false,
-                RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
-            })
-        {
+        // we must allocate parameter register
+        let arg_iter = blocks.iter().flat_map(|(&bid, bb)| {
+            bb.phinodes
+                .iter()
+                .enumerate()
+                .map(move |(aid, dtype)| (RegisterId::Arg { bid, aid }, dtype.deref()))
+        });
+
+        let used_register_iter =
+            blocks
+                .iter()
+                .flat_map(|(_, b)| b.walk_register())
+                .filter(|(rid, _)| match rid {
+                    RegisterId::Local { .. } => false,
+                    RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
+                });
+
+        for (rid, dtype) in arg_iter.chain(used_register_iter) {
             match dtype {
                 Dtype::Int { .. } | Dtype::Pointer { .. } => {
                     match reg_mp.insert_no_overwrite(
