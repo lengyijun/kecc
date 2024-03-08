@@ -1,5 +1,5 @@
 use crate::{
-    ir::{Block, BlockId, JumpArg},
+    ir::{Block, BlockExit, BlockId, JumpArg},
     SimplifyCfgReach,
 };
 
@@ -13,12 +13,55 @@ impl Gape {
             .fold(0, |acc, (bid, _)| usize::max(acc, bid.0))
             + 1;
 
+        // 1. deal with branch
+        // by inserting empty blocks
         loop {
-            if let Some((&bid, _)) = self
-                .blocks
-                .iter()
-                .find(|(bid, _)| need_edge_block(&self, *self.block_mp.get_by_left(bid).unwrap()))
-            {
+            if let Some((&bid, _)) = self.blocks.iter().find(|(bid, bb)| {
+                need_edge_block(&self, *self.block_mp.get_by_left(bid).unwrap())
+                    && matches!(
+                        bb.exit,
+                        BlockExit::Switch { .. } | BlockExit::ConditionalJump { .. }
+                    )
+            }) {
+                let mut v: Vec<(BlockId, Block)> = Vec::new();
+
+                for jump_arg in self.blocks.get_mut(&bid).unwrap().exit.walk_jump_args_mut() {
+                    let temp_bid = BlockId(id);
+                    id += 1;
+                    v.push((
+                        temp_bid,
+                        Block {
+                            phinodes: Vec::new(),
+                            instructions: Vec::new(),
+                            exit: BlockExit::Jump {
+                                arg: jump_arg.clone(),
+                            },
+                        },
+                    ));
+                    *jump_arg = JumpArg {
+                        bid: temp_bid,
+                        args: Vec::new(),
+                    };
+                }
+                for (bid, block) in v {
+                    let None = self.blocks.insert(bid, block) else {
+                        unreachable!()
+                    };
+                }
+                // remove unreachable blocks
+                let _ = SimplifyCfgReach::optimize_inner(self.bid_init, &mut self.blocks);
+                self = Self::new(self.blocks, self.bid_init, self.abi);
+            } else {
+                break;
+            }
+        }
+
+        // 2. deal with `BlockExit::Jump`
+        loop {
+            if let Some((&bid, _)) = self.blocks.iter().find(|(bid, bb)| {
+                need_edge_block(&self, *self.block_mp.get_by_left(bid).unwrap())
+                    && matches!(bb.exit, BlockExit::Jump { .. })
+            }) {
                 let mut v: Vec<(BlockId, Block)> = Vec::new();
                 let blocks = self.blocks.clone();
 
