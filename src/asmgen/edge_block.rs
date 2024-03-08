@@ -22,22 +22,18 @@ impl Gape {
                 .find(|(bid, _)| need_edge_block(&self, *self.block_mp.get_by_left(bid).unwrap()))
             {
                 let mut v: Vec<(BlockId, Block)> = Vec::new();
-                let x = &mut self.blocks.get_mut(&bid).unwrap().exit;
-                for jump_arg in x
-                    .walk_jump_args_mut()
-                    .filter(|jump_arg| !jump_arg.args.is_empty())
-                {
+                let blocks = self.blocks.clone();
+
+                for jump_arg in self.blocks.get_mut(&bid).unwrap().exit.walk_jump_args_mut() {
                     let temp_bid = BlockId(id);
                     id += 1;
                     v.push((
                         temp_bid,
-                        Block {
-                            phinodes: Vec::new(),
-                            instructions: Vec::new(),
-                            exit: BlockExit::Jump {
-                                arg: jump_arg.clone(),
-                            },
-                        },
+                        clone_block(
+                            blocks.get(&jump_arg.bid).unwrap().clone(),
+                            jump_arg.bid,
+                            temp_bid,
+                        ),
                     ));
                     *jump_arg = JumpArg {
                         bid: temp_bid,
