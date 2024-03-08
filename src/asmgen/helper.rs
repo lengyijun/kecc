@@ -96,7 +96,7 @@ pub struct Gape {
     pub blocks: BTreeMap<BlockId, ir::Block>,
     pub bid_init: BlockId,
 
-    pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
+    pub pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
     pub abi: FunctionAbi,
     pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
