@@ -7,6 +7,20 @@ use super::helper::Gape;
 
 impl Gape {
     pub fn add_edge_block(mut self) -> Self {
+        loop {
+            let x = self.block_mp.len();
+            self = self.add_edge_block_inner();
+            match self.block_mp.len().cmp(&x) {
+                std::cmp::Ordering::Less => unreachable!(),
+                std::cmp::Ordering::Equal => return self,
+                std::cmp::Ordering::Greater => {
+                    // continue
+                }
+            }
+        }
+    }
+
+    fn add_edge_block_inner(mut self) -> Self {
         let mut id = self
             .blocks
             .iter()
