@@ -7,10 +7,12 @@ use super::helper::Gape;
 
 impl Gape {
     pub fn add_edge_block(mut self) -> Self {
+        let max_bid =
+            |x: &Self| -> usize { x.blocks.keys().fold(0, |a, BlockId(b)| usize::max(a, *b)) };
         loop {
-            let x = self.block_mp.len();
+            let x = max_bid(&self);
             self = self.add_edge_block_inner();
-            match self.block_mp.len().cmp(&x) {
+            match max_bid(&self).cmp(&x) {
                 std::cmp::Ordering::Less => unreachable!(),
                 std::cmp::Ordering::Equal => return self,
                 std::cmp::Ordering::Greater => {
