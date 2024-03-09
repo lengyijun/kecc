@@ -5076,7 +5076,7 @@ fn gen_jump_arg(
 ) {
     let mut v: Vec<(Register, Register, ir::Dtype)> = Vec::new();
     let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
-    for (aid, operand) in izip!(&jump_arg.args).enumerate() {
+    for (aid, operand) in jump_arg.args.iter().enumerate() {
         match register_mp
             .get(&RegisterId::Arg {
                 bid: jump_arg.bid,
