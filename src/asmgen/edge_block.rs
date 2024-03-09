@@ -71,41 +71,8 @@ impl Gape {
                 break;
             }
         }
+        self
 
-        // 2. deal with `BlockExit::Jump`
-        loop {
-            if let Some((&bid, _)) = self.blocks.iter().find(|(bid, bb)| {
-                need_edge_block(&self, *self.block_mp.get_by_left(bid).unwrap())
-                    && matches!(bb.exit, BlockExit::Jump { .. })
-            }) {
-                let mut v: Vec<(BlockId, Block)> = Vec::new();
-                let blocks = self.blocks.clone();
-
-                for jump_arg in self.blocks.get_mut(&bid).unwrap().exit.walk_jump_args_mut() {
-                    let temp_bid = BlockId(id);
-                    id += 1;
-                    v.push((
-                        temp_bid,
-                        clone_block(
-                            blocks.get(&jump_arg.bid).unwrap().clone(),
-                            jump_arg.bid,
-                            temp_bid,
-                        ),
-                    ));
-                    jump_arg.bid = temp_bid;
-                }
-                for (bid, block) in v {
-                    let None = self.blocks.insert(bid, block) else {
-                        unreachable!()
-                    };
-                }
-                // remove unreachable blocks
-                let _ = SimplifyCfgReach::optimize_inner(self.bid_init, &mut self.blocks);
-                self = Self::new(self.blocks, self.bid_init, self.abi);
-            } else {
-                return self;
-            }
-        }
     }
 }
 

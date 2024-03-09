@@ -8,6 +8,7 @@ use crate::asm::{
     self, DataSize, Directive, IType, Immediate, Label, Pseudo, RType, Register, SType, Section,
     TranslationUnit,
 };
+use crate::asmgen::helper::constant_2_allocation;
 use crate::ir::{
     self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
 };
@@ -4723,6 +4724,38 @@ fn translate_block(
         res.extend(edits);
     }
 
+    // no edit before/after
+    let insn = *gape
+        .inst_mp
+        .get_by_left(&(bid, Yank::AllocateConstBeforeJump))
+        .unwrap();
+    assert!(
+        output
+            .edits
+            .iter()
+            .filter(|(prog_point, edit)| { prog_point.inst() == insn })
+            .count()
+            == 0
+    );
+
+    // assign constant to registers
+    // TODO: better way is to assign in each JumpArg
+    let mut constant_allocation_iter = output.inst_allocs(insn).iter();
+    let mut constant_v = Vec::new();
+    for jump_arg in block.exit.walk_jump_args_1() {
+        let mut v = Vec::new();
+        for c in jump_arg.walk_constant_arg() {
+            let reg = constant_2_allocation(
+                c.clone(),
+                *constant_allocation_iter.next().unwrap(),
+                &mut res,
+                float_mp,
+            );
+            v.push(reg);
+        }
+        constant_v.push(v);
+    }
+
     let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockExit)).unwrap();
     let edits = output
         .edits
@@ -4906,6 +4939,7 @@ fn gen_jump_arg(
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) {
+    /*
     let mut v: Vec<(Register, Register, ir::Dtype)> = Vec::new();
     let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
     for (aid, operand) in jump_arg.args.iter().enumerate() {
@@ -4965,6 +4999,7 @@ fn gen_jump_arg(
     // cp_parallel first
     res.extend(cp_parallel(v));
     res.extend(after_cp_parallel);
+     */
 
     res.push(asm::Instruction::Pseudo(Pseudo::J {
         offset: Label::new(func_name, jump_arg.bid),

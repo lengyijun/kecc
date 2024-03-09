@@ -1,21 +1,24 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     iter::{empty, once},
     ops::Deref,
 };
 
 use bimap::BiMap;
 use frozen::Frozen;
+use itertools::Itertools;
+use regalloc2::Allocation;
 
 use crate::{
     asm::{self, Pseudo, Register, RegisterType},
     asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
-        self, BlockExit, BlockId, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand, RegisterId,
+        self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand,
+        RegisterId,
     },
 };
 
-use super::FunctionAbi;
+use super::{load_operand_to_reg, FloatMp, FunctionAbi};
 
 impl Into<regalloc2::RegClass> for RegisterType {
     fn into(self) -> regalloc2::RegClass {
@@ -87,6 +90,7 @@ impl Into<regalloc2::RegClass> for Dtype {
 pub enum Yank {
     BeforeFirst,
     Instruction(usize),
+    AllocateConstBeforeJump,
     BlockExit,
 }
 
@@ -122,6 +126,11 @@ impl Gape {
                     .unwrap();
                 insn = insn.next();
             }
+            inst_mp
+                .insert_no_overwrite((bid, Yank::AllocateConstBeforeJump), insn)
+                .unwrap();
+            insn = insn.next();
+
             inst_mp
                 .insert_no_overwrite((bid, Yank::BlockExit), insn)
                 .unwrap();
@@ -204,35 +213,24 @@ impl Gape {
                     .walk_jump_args_1()
                     .map(|jump_arg| {
                         jump_arg
-                            .args
-                            .iter()
-                            .flat_map(|operand| match operand {
-                                Operand::Constant(c) => match c {
-                                    ir::Constant::Undef { .. } => unreachable!(),
-                                    ir::Constant::Unit => unreachable!(),
-                                    ir::Constant::Int { .. } => {
-                                        let x = Some(regalloc2::VReg::new(
-                                            virt_reg,
-                                            regalloc2::RegClass::Int,
-                                        ));
-                                        virt_reg += 1;
-                                        x
-                                    }
-                                    ir::Constant::Float { .. } => {
-                                        let x = Some(regalloc2::VReg::new(
-                                            virt_reg,
-                                            regalloc2::RegClass::Float,
-                                        ));
-                                        virt_reg += 1;
-                                        x
-                                    }
-                                    ir::Constant::GlobalVariable { .. } => {
-                                        unreachable!()
-                                    }
-                                },
-                                Operand::Register { .. } => None,
+                            .walk_constant_arg()
+                            .map(|c| match c {
+                                Constant::Unit | Constant::Undef { .. } => unreachable!(),
+                                Constant::Int { .. } => {
+                                    let x =
+                                        regalloc2::VReg::new(virt_reg, regalloc2::RegClass::Int);
+                                    virt_reg += 1;
+                                    x
+                                }
+                                Constant::Float { .. } => {
+                                    let x =
+                                        regalloc2::VReg::new(virt_reg, regalloc2::RegClass::Float);
+                                    virt_reg += 1;
+                                    x
+                                }
+                                Constant::GlobalVariable { .. } => unreachable!(),
                             })
-                            .collect()
+                            .collect_vec()
                     })
                     .collect();
                 (*bid, vv)
@@ -269,8 +267,9 @@ impl regalloc2::Function for Gape {
     fn num_insts(&self) -> usize {
         self.blocks
             .values()
-            .map(|b| b.instructions.len() + 1 + 1) // + 1 : blockexit
+            .map(|b| b.instructions.len() + 1 + 1 + 1) // + 1 : blockexit
             // +1 : BeforeFirst
+            // +1 : AllocateConstBeforeJump
             .fold(0, |a, b| a + b)
     }
 
@@ -339,7 +338,7 @@ impl regalloc2::Function for Gape {
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BeforeFirst | Yank::Instruction(_) => false,
+            Yank::BeforeFirst | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
             Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
@@ -350,7 +349,7 @@ impl regalloc2::Function for Gape {
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BeforeFirst | Yank::Instruction(_) => false,
+            Yank::BeforeFirst | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
             Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
@@ -450,42 +449,48 @@ impl regalloc2::Function for Gape {
                     &[]
                 }
             }
+            Yank::AllocateConstBeforeJump => self.constant_mp[&bid]
+                .iter()
+                .flatten()
+                .map(|&vreg| {
+                    regalloc2::Operand::new(
+                        vreg,
+                        regalloc2::OperandConstraint::Any,
+                        regalloc2::OperandKind::Def,
+                        regalloc2::OperandPos::Late,
+                    )
+                })
+                .collect_vec()
+                .leak(),
             Yank::BlockExit => {
-                let mut v: Vec<_> = self.constant_mp[&bid]
-                    .iter()
-                    .flatten()
-                    .map(|&vreg| {
-                        regalloc2::Operand::new(
-                            vreg,
+                let mut v: Vec<_> = Vec::new();
+                match &block.exit {
+                    BlockExit::Jump { .. } => v.leak(),
+                    BlockExit::ConditionalJump {
+                        condition:
+                            Operand::Register {
+                                rid: rid @ (RegisterId::Arg { .. } | RegisterId::Temp { .. }),
+                                dtype,
+                            },
+                        ..
+                    }
+                    | BlockExit::Switch {
+                        value:
+                            Operand::Register {
+                                rid: rid @ (RegisterId::Arg { .. } | RegisterId::Temp { .. }),
+                                dtype,
+                            },
+                        ..
+                    } => {
+                        let x = regalloc2::Operand::new(
+                            *self.reg_mp.get_by_left(&rid).unwrap(),
                             regalloc2::OperandConstraint::Any,
-                            regalloc2::OperandKind::Def,
+                            regalloc2::OperandKind::Use,
                             regalloc2::OperandPos::Early,
-                        )
-                    })
-                    .collect();
-                match block.exit {
-                    BlockExit::Jump { .. }
-                    | BlockExit::ConditionalJump { .. }
-                    | BlockExit::Switch { .. } => {
-                        v.extend(
-                            block
-                                .exit
-                                .walk_register()
-                                .filter_map(|(rid, dtype)| match rid {
-                                    RegisterId::Local { .. } => None,
-                                    RegisterId::Arg { .. } | RegisterId::Temp { .. } => {
-                                        Some(regalloc2::Operand::new(
-                                            *self.reg_mp.get_by_left(&rid).unwrap(),
-                                            regalloc2::OperandConstraint::Any,
-                                            regalloc2::OperandKind::Use,
-                                            regalloc2::OperandPos::Early,
-                                        ))
-                                    }
-                                }),
                         );
+                        v.push(x);
                         v.leak()
                     }
-
                     BlockExit::Return {
                         value:
                             Operand::Register {
@@ -529,7 +534,7 @@ impl regalloc2::Function for Gape {
                         value: Operand::Constant(..),
                     } => &[],
                     BlockExit::Unreachable => unreachable!(),
-                    _ => unreachable!(),
+                    _ => &[],
                 }
             }
             Yank::Instruction(iid) => {
@@ -653,7 +658,9 @@ impl regalloc2::Function for Gape {
                     res
                 }
             },
-            Yank::BeforeFirst | Yank::BlockExit => regalloc2::PRegSet::empty(),
+            Yank::BeforeFirst | Yank::AllocateConstBeforeJump | Yank::BlockExit => {
+                regalloc2::PRegSet::empty()
+            }
         }
     }
 
@@ -726,5 +733,34 @@ pub fn edit_2_instruction(edit: &regalloc2::Edit) -> Vec<asm::Instruction> {
             (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
             (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
         },
+    }
+}
+
+pub fn constant_2_allocation(
+    c: Constant,
+    allocation: Allocation,
+    res: &mut Vec<asm::Instruction>,
+    float_mp: &mut FloatMp,
+) -> Register {
+    match allocation.kind() {
+        regalloc2::AllocationKind::None => unreachable!(),
+        regalloc2::AllocationKind::Reg => {
+            let reg: Register = allocation.as_reg().unwrap().into();
+            match c {
+                Constant::Undef { .. } | Constant::Unit => unreachable!(),
+                Constant::Float { .. } | Constant::Int { .. } => {
+                    // TODO: constant_2_register
+                    load_operand_to_reg(
+                        Operand::Constant(c),
+                        reg,
+                        res,
+                        &mut HashMap::new(), // useless
+                        float_mp,
+                    )
+                }
+                Constant::GlobalVariable { .. } => unreachable!(),
+            }
+        }
+        regalloc2::AllocationKind::Stack => unimplemented!(),
     }
 }
