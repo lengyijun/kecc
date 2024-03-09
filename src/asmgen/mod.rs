@@ -4729,13 +4729,13 @@ fn translate_block(
         .inst_mp
         .get_by_left(&(bid, Yank::AllocateConstBeforeJump))
         .unwrap();
-    assert!(
+    assert_eq!(
         output
             .edits
             .iter()
             .filter(|(prog_point, edit)| { prog_point.inst() == insn })
-            .count()
-            == 0
+            .count(),
+        0
     );
 
     // assign constant to registers
