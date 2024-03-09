@@ -4729,13 +4729,32 @@ fn translate_block(
         .inst_mp
         .get_by_left(&(bid, Yank::AllocateConstBeforeJump))
         .unwrap();
-    assert_eq!(
+
+    res.extend(
         output
             .edits
             .iter()
-            .filter(|(prog_point, edit)| { prog_point.inst() == insn })
-            .count(),
-        0
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::before(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(edit_2_instruction),
+    );
+    res.extend(
+        output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::after(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(edit_2_instruction),
     );
 
     // assign constant to registers
