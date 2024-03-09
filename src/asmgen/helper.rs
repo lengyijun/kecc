@@ -284,7 +284,7 @@ impl regalloc2::Function for Gape {
 
     fn block_insns(&self, block: regalloc2::Block) -> regalloc2::InstRange {
         let block_id: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        regalloc2::InstRange::forward(
+        regalloc2::InstRange::new(
             *self
                 .inst_mp
                 .get_by_left(&(block_id, Yank::BeforeFirst))
