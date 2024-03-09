@@ -668,6 +668,7 @@ impl regalloc2::Function for Gape {
         self.blocks
             .values()
             .fold(0, |acc, b| acc + b.instructions.len() + b.phinodes.len())
+            + self.constant_mp.len()
     }
 
     fn spillslot_size(&self, regclass: regalloc2::RegClass) -> usize {
