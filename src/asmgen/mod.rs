@@ -5145,6 +5145,32 @@ fn store_operand_to_reg(
     float_mp: &mut FloatMp,
 ) {
     let dtype = operand.dtype();
+    match (&operand, &dtype) {
+        (ir::Operand::Register { rid, dtype }, ir::Dtype::Unit { is_const }) => unreachable!(),
+        (ir::Operand::Register { rid, dtype }, ir::Dtype::Int { .. })
+        | (ir::Operand::Register { rid, dtype }, ir::Dtype::Float { .. })
+        | (ir::Operand::Register { rid, dtype }, ir::Dtype::Pointer { .. }) => {
+            return;
+        }
+        (ir::Operand::Register { rid, dtype }, ir::Dtype::Array { inner, size }) => unreachable!(),
+        (
+            ir::Operand::Register { rid, dtype },
+            ir::Dtype::Struct {
+                name,
+                fields,
+                is_const,
+                size_align_offsets,
+            },
+        ) => {}
+        (ir::Operand::Register { rid, dtype }, ir::Dtype::Function { ret, params }) => {
+            unreachable!()
+        }
+        (ir::Operand::Register { rid, dtype }, ir::Dtype::Typedef { name, is_const }) => {
+            unreachable!()
+        }
+        _ => {}
+    }
+
     let x = load_operand_to_reg(operand, target_register, res, register_mp, float_mp);
     if x != target_register {
         match dtype {
