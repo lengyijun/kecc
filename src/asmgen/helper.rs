@@ -700,6 +700,15 @@ impl BlockExit {
     }
 }
 
+impl JumpArg {
+    pub fn walk_constant_arg(&self) -> Box<dyn Iterator<Item = &Constant> + '_> {
+        Box::new(self.args.iter().flat_map(|operand| match operand {
+            Operand::Constant(c) => Some(c),
+            Operand::Register { .. } => None,
+        }))
+    }
+}
+
 pub fn edit_2_instruction(edit: &regalloc2::Edit) -> Vec<asm::Instruction> {
     match edit {
         regalloc2::Edit::Move { from, to } => match (from.kind(), to.kind()) {
