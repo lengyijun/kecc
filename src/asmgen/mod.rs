@@ -4799,13 +4799,21 @@ fn translate_block(
             arg_then,
             arg_else,
         } => {
-            let rs1 = load_operand_to_reg(
-                condition.clone(),
-                Register::T0,
-                &mut res,
-                register_mp,
-                float_mp,
-            );
+            let rs1 = match output.inst_allocs(insn).first() {
+                Some(allocation) => allocation_2_reg(*allocation, Register::T0),
+                None => {
+                    unreachable!()
+                    /*
+                    load_operand_to_reg(
+                        condition.clone(),
+                        Register::T0,
+                        &mut res,
+                        register_mp,
+                        float_mp,
+                    )
+                    */
+                }
+            };
             let else_label = gen_jump_arg_or_new_block(
                 func_name,
                 bid,

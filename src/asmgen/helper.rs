@@ -764,3 +764,11 @@ pub fn constant_2_allocation(
         regalloc2::AllocationKind::Stack => unimplemented!(),
     }
 }
+
+pub fn allocation_2_reg(allocation: Allocation, or_register: Register) -> Register {
+    match allocation.kind() {
+        regalloc2::AllocationKind::None => unreachable!(),
+        regalloc2::AllocationKind::Reg => allocation.as_reg().unwrap().into(),
+        regalloc2::AllocationKind::Stack => todo!(),
+    }
+}
