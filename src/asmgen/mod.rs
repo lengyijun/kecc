@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod edge_block;
+mod edge_block_2;
 mod helper;
 mod mesh;
 
@@ -442,6 +443,7 @@ fn translate_function(
     // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
     let gape =
         helper::Gape::from_definition(definition, function_abi_mp.get(func_name).unwrap().clone());
+    let gape = Gape::foo(gape);
     let gape = Gape::add_edge_block(gape);
     let output = regalloc2::run(
         &gape,
