@@ -540,35 +540,8 @@ impl regalloc2::Function for Gape {
                 let instruction: &ir::Instruction = &block.instructions[iid];
                 let mut v: Vec<regalloc2::Operand> = Vec::new();
 
-                let rid = RegisterId::Temp { bid, iid };
-                match instruction.dtype() {
-                    Dtype::Unit { .. } => {}
-                    Dtype::Int { .. } | Dtype::Pointer { .. } => {
-                        match self.reg_mp.get_by_left(&rid) {
-                            Some(dest) => v.push(regalloc2::Operand::new(
-                                *dest,
-                                regalloc2::OperandConstraint::Any,
-                                regalloc2::OperandKind::Def,
-                                regalloc2::OperandPos::Late,
-                            )),
-                            None => {
-                                // result never used
-                                return &[];
-                            }
-                        }
-                    }
-                    Dtype::Float { .. } => v.push(regalloc2::Operand::new(
-                        *self.reg_mp.get_by_left(&rid).unwrap(),
-                        regalloc2::OperandConstraint::Any,
-                        regalloc2::OperandKind::Def,
-                        regalloc2::OperandPos::Late,
-                    )),
-
-                    Dtype::Array { .. } => unreachable!(),
-                    Dtype::Struct { .. } => {}
-                    Dtype::Function { .. } => unreachable!(),
-                    Dtype::Typedef { .. } => unreachable!(),
-                }
+                // 1. add read
+                // 2. add write
 
                 for (rid, dtype) in instruction.walk_register().filter(|(rid, _)| match rid {
                     RegisterId::Local { .. } => false,
@@ -631,6 +604,36 @@ impl regalloc2::Function for Gape {
                         Dtype::Function { .. } => unreachable!(),
                         Dtype::Typedef { .. } => unreachable!(),
                     }
+                }
+
+                let rid = RegisterId::Temp { bid, iid };
+                match instruction.dtype() {
+                    Dtype::Unit { .. } => {}
+                    Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                        match self.reg_mp.get_by_left(&rid) {
+                            Some(dest) => v.push(regalloc2::Operand::new(
+                                *dest,
+                                regalloc2::OperandConstraint::Any,
+                                regalloc2::OperandKind::Def,
+                                regalloc2::OperandPos::Late,
+                            )),
+                            None => {
+                                // result never used
+                                return &[];
+                            }
+                        }
+                    }
+                    Dtype::Float { .. } => v.push(regalloc2::Operand::new(
+                        *self.reg_mp.get_by_left(&rid).unwrap(),
+                        regalloc2::OperandConstraint::Any,
+                        regalloc2::OperandKind::Def,
+                        regalloc2::OperandPos::Late,
+                    )),
+
+                    Dtype::Array { .. } => unreachable!(),
+                    Dtype::Struct { .. } => {}
+                    Dtype::Function { .. } => unreachable!(),
+                    Dtype::Typedef { .. } => unreachable!(),
                 }
 
                 v.leak()

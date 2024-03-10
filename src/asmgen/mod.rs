@@ -1517,6 +1517,7 @@ fn translate_block(
             .get_by_left(&(bid, Yank::Instruction(iid)))
             .unwrap();
 
+        // .next().is_none() means this instruction is striped in helper.rs
         let mut allocations = output
             .inst_allocs(
                 *gape
@@ -1529,23 +1530,8 @@ fn translate_block(
             .map(<regalloc2::PReg as Into<Register>>::into);
 
         // update register_mp
-        match instr.dtype() {
-            ir::Dtype::Unit { .. } => {}
-            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
-                let reg = match allocations.next() {
-                    Some(reg) => reg,
-                    None => continue 'instr_loop,
-                };
-                let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
-            }
-            ir::Dtype::Array { .. } => unreachable!(),
-            ir::Dtype::Struct { .. } => {
-                // temp struct are always on stack
-            }
-            ir::Dtype::Function { .. } => unreachable!(),
-            ir::Dtype::Typedef { .. } => unreachable!(),
-        }
-
+        // 1. update read
+        // 2. update write
         for (rid, dtype) in instr.walk_register().filter(|(rid, _)| match rid {
             RegisterId::Local { .. } => false,
             RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
@@ -1553,10 +1539,11 @@ fn translate_block(
             match dtype {
                 ir::Dtype::Unit { .. } => {}
                 ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. } => {
-                    let _ = register_mp.insert(
-                        rid,
-                        DirectOrInDirect::Direct(RegOrStack::Reg(allocations.next().unwrap())),
-                    );
+                    let reg = match allocations.next() {
+                        Some(reg) => reg,
+                        None => continue 'instr_loop,
+                    };
+                    let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
                 }
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => match rid {
@@ -1580,6 +1567,22 @@ fn translate_block(
                 ir::Dtype::Function { .. } => unreachable!(),
                 ir::Dtype::Typedef { .. } => unreachable!(),
             }
+        }
+        match instr.dtype() {
+            ir::Dtype::Unit { .. } => {}
+            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
+                let reg = match allocations.next() {
+                    Some(reg) => reg,
+                    None => continue 'instr_loop,
+                };
+                let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
+            }
+            ir::Dtype::Array { .. } => unreachable!(),
+            ir::Dtype::Struct { .. } => {
+                // temp struct are always on stack
+            }
+            ir::Dtype::Function { .. } => unreachable!(),
+            ir::Dtype::Typedef { .. } => unreachable!(),
         }
 
         let edits = output
