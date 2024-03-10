@@ -72,7 +72,6 @@ impl Gape {
             }
         }
         self
-
     }
 }
 
@@ -94,18 +93,4 @@ where
         }
     }
     false
-}
-
-fn clone_block(mut block: Block, from: BlockId, to: BlockId) -> Block {
-    for x in block.walk_register_mut() {
-        match x {
-            crate::ir::RegisterId::Local { .. } => {}
-            crate::ir::RegisterId::Arg { bid, .. } | crate::ir::RegisterId::Temp { bid, .. } => {
-                if *bid == from {
-                    *bid = to;
-                }
-            }
-        }
-    }
-    block
 }
