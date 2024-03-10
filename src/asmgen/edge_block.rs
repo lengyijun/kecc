@@ -6,6 +6,7 @@ use crate::{
 use super::helper::Gape;
 
 impl Gape {
+    /// avoid regalloc2::RegAllocError::DisallowedBranchArg
     pub fn add_edge_block(mut self) -> Self {
         let max_bid =
             |x: &Self| -> usize { x.blocks.keys().fold(0, |a, BlockId(b)| usize::max(a, *b)) };
