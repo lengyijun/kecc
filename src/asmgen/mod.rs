@@ -233,7 +233,16 @@ fn translate_function(
             aid,
         };
         match alloc {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {}
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
+                // update float in register_mp to help edit_2_instruction
+                match dtype {
+                    ir::Dtype::Float { .. } => {
+                        let _ = register_mp
+                            .insert(register_id, DirectOrInDirect::Direct(RegOrStack::Reg(*reg)));
+                    }
+                    _ => {}
+                }
+            }
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
