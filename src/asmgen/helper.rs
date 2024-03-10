@@ -106,7 +106,7 @@ pub struct Gape {
     pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
-    pub constant_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
+    pub constant_in_jumparg_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
 }
 
 impl Gape {
@@ -249,7 +249,7 @@ impl Gape {
         Self {
             bid_init,
             abi,
-            constant_mp: Frozen::freeze(Self::init_constant_mp(&blocks, reg_mp.len())),
+            constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_mp(&blocks, reg_mp.len())),
             reg_mp,
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
@@ -376,7 +376,7 @@ impl regalloc2::Function for Gape {
         let Some(jump_arg) = self.blocks[&bid].exit.walk_jump_args_1().nth(succ_idx) else {
             unreachable!()
         };
-        let mut constant_mp = self.constant_mp[&block_id_1][succ_idx].iter();
+        let mut constant_mp = self.constant_in_jumparg_mp[&block_id_1][succ_idx].iter();
         jump_arg
             .args
             .iter()
@@ -449,7 +449,7 @@ impl regalloc2::Function for Gape {
                     &[]
                 }
             }
-            Yank::AllocateConstBeforeJump => self.constant_mp[&bid]
+            Yank::AllocateConstBeforeJump => self.constant_in_jumparg_mp[&bid]
                 .iter()
                 .flatten()
                 .map(|&vreg| {
@@ -707,7 +707,12 @@ impl regalloc2::Function for Gape {
         self.blocks
             .values()
             .fold(0, |acc, b| acc + b.instructions.len() + b.phinodes.len())
-            + self.constant_mp.len()
+            + self
+                .constant_in_jumparg_mp
+                .values()
+                .flatten()
+                .flatten()
+                .count()
     }
 
     fn spillslot_size(&self, regclass: regalloc2::RegClass) -> usize {
