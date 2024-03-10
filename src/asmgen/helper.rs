@@ -204,7 +204,7 @@ impl Gape {
 
     fn init_constant_mp(
         blocks: &BTreeMap<BlockId, ir::Block>,
-        mut virt_reg: usize,
+        mut next_virt_reg: impl FnMut() -> usize,
     ) -> BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>> {
         blocks
             .iter()
@@ -218,15 +218,17 @@ impl Gape {
                             .map(|c| match c {
                                 Constant::Unit | Constant::Undef { .. } => unreachable!(),
                                 Constant::Int { .. } => {
-                                    let x =
-                                        regalloc2::VReg::new(virt_reg, regalloc2::RegClass::Int);
-                                    virt_reg += 1;
+                                    let x = regalloc2::VReg::new(
+                                        next_virt_reg(),
+                                        regalloc2::RegClass::Int,
+                                    );
                                     x
                                 }
                                 Constant::Float { .. } => {
-                                    let x =
-                                        regalloc2::VReg::new(virt_reg, regalloc2::RegClass::Float);
-                                    virt_reg += 1;
+                                    let x = regalloc2::VReg::new(
+                                        next_virt_reg(),
+                                        regalloc2::RegClass::Float,
+                                    );
                                     x
                                 }
                                 Constant::GlobalVariable { .. } => unreachable!(),
@@ -245,11 +247,17 @@ impl Gape {
 
     pub fn new(blocks: BTreeMap<BlockId, ir::Block>, bid_init: BlockId, abi: FunctionAbi) -> Self {
         let reg_mp = Frozen::freeze(Self::init_reg_mp(&blocks));
+        let mut a = reg_mp.len();
+        let f = || -> usize {
+            let b = a;
+            a += 1;
+            b
+        };
 
         Self {
             bid_init,
             abi,
-            constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_mp(&blocks, reg_mp.len())),
+            constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_mp(&blocks, f)),
             reg_mp,
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
