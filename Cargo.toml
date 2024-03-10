@@ -43,3 +43,4 @@ petgraph = {git = "https://github.com/lengyijun/petgraph", branch = "is_chordal"
 bimap = "0.6.3"
 regalloc2 = {git = "https://github.com/bytecodealliance/regalloc2", commit = "1628818aed380bff57d19f85f8b86d4df19ab46e" }
 frozen = "1.0.0"
+linked-hash-map = "0.5"

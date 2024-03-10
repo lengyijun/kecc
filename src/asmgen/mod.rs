@@ -16,6 +16,7 @@ use crate::Translate;
 use bimap::BiMap;
 use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
+use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 
 use petgraph::graph::NodeIndex;
@@ -26,7 +27,7 @@ use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
 
-use self::helper::{allocation_2_reg, edit_2_instruction, Gape, Yank};
+use self::helper::{allocation_2_reg, Gape, Yank};
 
 static INT_OFFSETS: [(Register, i64); 12] = [
     (Register::S0, 16),
@@ -221,7 +222,8 @@ fn translate_function(
     // backup fs0 fs1 fs2 ...
     stack_offset_2_s0 -= 8 * 12 * 2;
 
-    let mut register_mp: HashMap<RegisterId, DirectOrInDirect<RegOrStack>> = HashMap::new();
+    let mut register_mp: LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>> =
+        LinkedHashMap::new();
 
     let mut alloc_arg = vec![];
 
@@ -767,7 +769,7 @@ fn translate_function(
 fn alloc_register(
     definition: &FunctionDefinition,
     abi: &FunctionAbi,
-    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     stack_offset_2_s0: &mut i64,
 ) {
     let reserved_rids = definition.get_rid_in_loop();
@@ -798,7 +800,7 @@ fn alloc_register(
 fn color(
     ig: &mut GraphWrapper,
     colors: &[Register],
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
     let mut used_color: HashSet<Register> = HashSet::new();
     for node_index in lbfs(&ig.graph).into_iter() {
@@ -883,7 +885,7 @@ impl GraphWrapper {
 
     fn dump_register_mp(
         &self,
-        register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+        register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     ) {
         for node_index in self.graph.node_identifiers() {
             let Some(register_id) = self.register_id_2_node_index.get_by_right(&node_index) else {
@@ -942,7 +944,7 @@ impl GraphWrapper {
 
 fn int_inter_block_liveness_graph(
     definition: &FunctionDefinition,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> LivenessRes {
     // def can be aggressive
     let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
@@ -988,7 +990,7 @@ fn int_inter_block_liveness_graph(
 
 fn float_inter_block_liveness_graph(
     definition: &FunctionDefinition,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> LivenessRes {
     // def can be aggressive
     let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
@@ -1035,7 +1037,7 @@ fn float_inter_block_liveness_graph(
 fn int_interference_graph(
     definition: &FunctionDefinition,
     abi: &FunctionAbi,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut int_ig: GraphWrapper = GraphWrapper::default();
     for (rid, v) in register_mp {
@@ -1185,7 +1187,7 @@ fn int_interference_graph(
 fn float_interference_graph(
     definition: &FunctionDefinition,
     abi: &FunctionAbi,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) -> GraphWrapper {
     let mut float_ig: GraphWrapper = GraphWrapper::default();
     for (rid, v) in register_mp {
@@ -1322,7 +1324,7 @@ fn spills(
     colors: &[Register],
     stack_offset_2_s0: &mut i64,
     reserved_rids: &HashSet<RegisterId>,
-    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
     let Some(clique_iterator) = petgraph::algo::peo::CliqueIterator::new(&ig.graph) else {
         dbg!(&ig.register_id_2_node_index);
@@ -1401,7 +1403,7 @@ fn spills(
 fn spill(
     register_id: RegisterId,
     stack_offset_2_s0: &mut i64,
-    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
 ) {
     let mut allocate_on_stack = || {
         let align: i64 = 8;
@@ -1474,7 +1476,7 @@ fn translate_block(
     bid: BlockId,
     block: &ir::Block,
     temp_block: &mut Vec<asm::Block>,
-    register_mp: &mut HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     float_mp: &mut FloatMp,
@@ -1494,7 +1496,7 @@ fn translate_block(
                 None
             }
         })
-        .flat_map(edit_2_instruction);
+        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
     res.extend(edits);
 
     let edits = output
@@ -1507,7 +1509,7 @@ fn translate_block(
                 None
             }
         })
-        .flat_map(edit_2_instruction);
+        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
     res.extend(edits);
 
     'instr_loop: for (iid, instr) in block.instructions.iter().enumerate() {
@@ -1595,7 +1597,7 @@ fn translate_block(
                     None
                 }
             })
-            .flat_map(edit_2_instruction);
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
         res.extend(edits);
 
         match &**instr {
@@ -4748,7 +4750,7 @@ fn translate_block(
                     None
                 }
             })
-            .flat_map(edit_2_instruction);
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
         res.extend(edits);
     }
 
@@ -4769,7 +4771,7 @@ fn translate_block(
                     None
                 }
             })
-            .flat_map(edit_2_instruction),
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
     );
     res.extend(
         output
@@ -4782,7 +4784,7 @@ fn translate_block(
                     None
                 }
             })
-            .flat_map(edit_2_instruction),
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
     );
 
     // assign constant to registers
@@ -4814,7 +4816,7 @@ fn translate_block(
                 None
             }
         })
-        .flat_map(edit_2_instruction);
+        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
     res.extend(edits);
 
     match &block.exit {
@@ -4953,7 +4955,7 @@ fn translate_block(
                 None
             }
         })
-        .flat_map(edit_2_instruction);
+        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
     res.extend(edits);
 
     res
@@ -4991,7 +4993,7 @@ fn gen_jump_arg(
     func_name: &str,
     jump_arg: &ir::JumpArg,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) {
     /*
@@ -5065,7 +5067,7 @@ fn gen_jump_arg_or_new_block(
     func_name: &str,
     from: BlockId,
     jump_arg: &ir::JumpArg,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
     temp_block: &mut Vec<asm::Block>,
 ) -> Label {
@@ -5166,7 +5168,7 @@ fn load_operand_to_reg(
     operand: ir::Operand,
     or_register: Register,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) -> Register {
     match operand {
@@ -5196,7 +5198,7 @@ fn store_operand_to_reg(
     operand: ir::Operand,
     target_register: Register,
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) {
     let dtype = operand.dtype();
@@ -5251,7 +5253,7 @@ fn operand_to_stack(
     operand: ir::Operand,
     (target_register, target_base): (Register, u64),
     res: &mut Vec<asm::Instruction>,
-    register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) {
     assert!(target_register == Register::Sp || target_register == Register::S0);

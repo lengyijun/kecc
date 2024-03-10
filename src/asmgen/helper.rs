@@ -7,10 +7,11 @@ use std::{
 use bimap::BiMap;
 use frozen::Frozen;
 use itertools::Itertools;
+use linked_hash_map::LinkedHashMap;
 use regalloc2::Allocation;
 
 use crate::{
-    asm::{self, Pseudo, Register, RegisterType},
+    asm::{self, DataSize, Pseudo, Register, RegisterType},
     asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
         self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand,
@@ -755,23 +756,86 @@ impl JumpArg {
     }
 }
 
-pub fn edit_2_instruction(edit: &regalloc2::Edit) -> Vec<asm::Instruction> {
-    match edit {
-        regalloc2::Edit::Move { from, to } => match (from.kind(), to.kind()) {
-            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::None) => todo!(),
-            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Reg) => todo!(),
-            (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Stack) => todo!(),
-            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::None) => todo!(),
-            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Reg) => {
-                let rs = from.as_reg().unwrap().into();
-                let rd = to.as_reg().unwrap().into();
-                vec![asm::Instruction::Pseudo(Pseudo::Mv { rd, rs })]
+impl Gape {
+    fn get_dtype(&self, register_id: RegisterId) -> Dtype {
+        match register_id {
+            RegisterId::Local { .. } => unreachable!(),
+            RegisterId::Arg { bid, aid } => {
+                let b = &self.blocks[&bid];
+                b.phinodes[aid].deref().clone()
             }
-            (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Stack) => todo!(),
-            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::None) => todo!(),
-            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
-            (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
-        },
+            RegisterId::Temp { bid, iid } => {
+                let b = &self.blocks[&bid];
+                b.instructions[iid].dtype()
+            }
+        }
+    }
+
+    pub fn edit_2_instruction(
+        &self,
+        edit: &regalloc2::Edit,
+        register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    ) -> Vec<asm::Instruction> {
+        match edit {
+            regalloc2::Edit::Move { from, to } => match (from.kind(), to.kind()) {
+                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::None) => todo!(),
+                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Reg) => todo!(),
+                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Stack) => todo!(),
+                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::None) => todo!(),
+                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Reg) => {
+                    let rs = from.as_reg().unwrap().into();
+                    let rd = to.as_reg().unwrap().into();
+
+                    match rs {
+                        Register::Zero
+                        | Register::Ra
+                        | Register::Sp
+                        | Register::Gp
+                        | Register::Tp => {
+                            unreachable!()
+                        }
+                        Register::Temp(RegisterType::Integer, _)
+                        | Register::Saved(RegisterType::Integer, _)
+                        | Register::Arg(RegisterType::Integer, _) => {
+                            vec![asm::Instruction::Pseudo(Pseudo::Mv { rd, rs })]
+                        }
+                        Register::Temp(RegisterType::FloatingPoint, _)
+                        | Register::Saved(RegisterType::FloatingPoint, _)
+                        | Register::Arg(RegisterType::FloatingPoint, _) => {
+                            for (register_id, v) in register_mp.iter().rev() {
+                                match v {
+                                    DirectOrInDirect::Direct(RegOrStack::Reg(reg))
+                                    | DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
+                                        if *reg == rs {
+                                            let dtype = self.get_dtype(*register_id);
+                                            match &dtype {
+                                                Dtype::Float { .. } => {
+                                                    return vec![asm::Instruction::Pseudo(
+                                                        Pseudo::Fmv {
+                                                            rd,
+                                                            rs,
+                                                            data_size: DataSize::try_from(dtype)
+                                                                .unwrap(),
+                                                        },
+                                                    )];
+                                                }
+                                                _ => unreachable!(),
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            unreachable!()
+                        }
+                    }
+                }
+                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Stack) => todo!(),
+                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::None) => todo!(),
+                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
+                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
+            },
+        }
     }
 }
 
@@ -793,7 +857,7 @@ pub fn constant_2_allocation(
                         Operand::Constant(c),
                         reg,
                         res,
-                        &mut HashMap::new(), // useless
+                        &mut LinkedHashMap::new(), // useless
                         float_mp,
                     )
                 }
