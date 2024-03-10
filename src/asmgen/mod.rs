@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
 
-use self::helper::{edit_2_instruction, Gape, Yank};
+use self::helper::{allocation_2_reg, edit_2_instruction, Gape, Yank};
 
 static INT_OFFSETS: [(Register, i64); 12] = [
     (Register::S0, 16),
@@ -246,6 +246,12 @@ fn translate_function(
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
                 // must be a struct
+                let None = register_mp.insert(
+                    register_id,
+                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { src: Some(*reg) }),
+                ) else {
+                    unreachable!()
+                };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
@@ -1533,7 +1539,9 @@ fn translate_block(
                 let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
             }
             ir::Dtype::Array { .. } => unreachable!(),
-            ir::Dtype::Struct { .. } => {}
+            ir::Dtype::Struct { .. } => {
+                // temp struct are always on stack
+            }
             ir::Dtype::Function { .. } => unreachable!(),
             ir::Dtype::Typedef { .. } => unreachable!(),
         }
@@ -1551,7 +1559,24 @@ fn translate_block(
                     );
                 }
                 ir::Dtype::Array { .. } => unreachable!(),
-                ir::Dtype::Struct { .. } => {}
+                ir::Dtype::Struct { .. } => match rid {
+                    RegisterId::Local { .. } => unreachable!(),
+                    RegisterId::Arg { bid, .. } => {
+                        if bid == gape.bid_init {
+                            let _ = register_mp.insert(
+                                rid,
+                                DirectOrInDirect::InDirect(RegOrStack::Reg(
+                                    allocations.next().unwrap(),
+                                )),
+                            );
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    RegisterId::Temp { .. } => {
+                        // temp struct are always on stack
+                    }
+                },
                 ir::Dtype::Function { .. } => unreachable!(),
                 ir::Dtype::Typedef { .. } => unreachable!(),
             }

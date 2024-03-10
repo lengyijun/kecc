@@ -163,7 +163,7 @@ impl Gape {
 
         for (rid, dtype) in arg_iter.chain(used_register_iter) {
             match dtype {
-                Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Struct { .. } => {
                     match reg_mp.insert_no_overwrite(
                         rid,
                         regalloc2::VReg::new(index, regalloc2::RegClass::Int),
@@ -181,7 +181,7 @@ impl Gape {
                         Err(_) => {}
                     }
                 }
-                Dtype::Array { .. } | Dtype::Unit { .. } | Dtype::Struct { .. } => {}
+                Dtype::Array { .. } | Dtype::Unit { .. } => {}
                 Dtype::Function { .. } => unreachable!(),
                 Dtype::Typedef { .. } => unreachable!(),
             }
@@ -407,15 +407,14 @@ impl regalloc2::Function for Gape {
                                 )
                                 | crate::asmgen::ParamAlloc::PrimitiveType(
                                     DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
-                                ) => {
-                                    let x = regalloc2::Operand::new(
-                                        *self.reg_mp.get_by_left(&rid).unwrap(),
+                                ) => self.reg_mp.get_by_left(&rid).map(|vreg| {
+                                    regalloc2::Operand::new(
+                                        *vreg,
                                         regalloc2::OperandConstraint::FixedReg((*reg).into()),
                                         regalloc2::OperandKind::Def,
                                         regalloc2::OperandPos::Late,
-                                    );
-                                    Some(x)
-                                }
+                                    )
+                                }),
                                 crate::asmgen::ParamAlloc::PrimitiveType(
                                     DirectOrInDirect::Direct(RegOrStack::Stack { .. }),
                                 )
@@ -592,7 +591,43 @@ impl regalloc2::Function for Gape {
                             regalloc2::OperandPos::Early,
                         )),
                         Dtype::Array { .. } => unreachable!(),
-                        Dtype::Struct { .. } => {}
+                        Dtype::Struct { .. } => {
+                            match rid {
+                                RegisterId::Local { .. } => unreachable!(),
+                                RegisterId::Arg { bid, aid } => {
+                                    if bid == self.bid_init {
+                                        // check in abi
+                                        match self.abi.params_alloc[aid] {
+                                            super::ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::Direct(_),
+                                            ) => unreachable!(),
+                                            super::ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
+                                            ) => v.push(regalloc2::Operand::new(
+                                                *self.reg_mp.get_by_left(&rid).unwrap(),
+                                                regalloc2::OperandConstraint::Any,
+                                                regalloc2::OperandKind::Use,
+                                                regalloc2::OperandPos::Early,
+                                            )),
+                                            super::ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::InDirect(RegOrStack::Stack {
+                                                    ..
+                                                }),
+                                            ) => {}
+                                            super::ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::InDirect(_),
+                                            ) => unreachable!(),
+                                            super::ParamAlloc::StructInRegister(_) => todo!(),
+                                        }
+                                    } else {
+                                        unreachable!()
+                                    }
+                                }
+                                RegisterId::Temp { .. } => {
+                                    // always on stack
+                                }
+                            }
+                        }
                         Dtype::Function { .. } => unreachable!(),
                         Dtype::Typedef { .. } => unreachable!(),
                     }
