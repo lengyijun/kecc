@@ -4876,8 +4876,12 @@ fn translate_block(
             cases,
         } => {
             let dtype = value.dtype();
-            let rs1 =
-                load_operand_to_reg(value.clone(), Register::T0, &mut res, register_mp, float_mp);
+            let rs1 = match output.inst_allocs(insn).first() {
+                Some(allocation) => allocation_2_reg(*allocation, Register::T0),
+                None => {
+                    unreachable!()
+                }
+            };
             for (c, jump_arg) in cases {
                 let ir::Constant::Int { value, .. } = c else {
                     unreachable!()
