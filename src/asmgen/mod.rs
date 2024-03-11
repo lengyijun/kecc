@@ -929,16 +929,18 @@ fn translate_function(
         });
     }
 
-    let init_block = function.blocks.get_mut(0).unwrap();
+    function.blocks.extend(temp_block);
+
+    let init_block = function.blocks.first_mut().unwrap();
     assert_eq!(
         init_block.label,
         Some(Label::new(func_name, definition.bid_init))
     );
     backup_ra_and_init_sp.extend(std::mem::replace(&mut init_block.instructions, Vec::new()));
-    init_block.instructions = backup_ra_and_init_sp;
-    init_block.label = Some(Label(func_name.to_owned()));
-
-    function.blocks.extend(temp_block);
+    *init_block = asm::Block {
+        label: Some(Label(func_name.to_owned())),
+        instructions: backup_ra_and_init_sp,
+    };
 
     function
 }
