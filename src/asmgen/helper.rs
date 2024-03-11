@@ -73,17 +73,19 @@ impl From<regalloc2::PReg> for Register {
     }
 }
 
-impl Into<regalloc2::RegClass> for Dtype {
-    fn into(self) -> regalloc2::RegClass {
+impl TryInto<regalloc2::RegClass> for Dtype {
+    type Error = ();
+
+    fn try_into(self) -> Result<regalloc2::RegClass, Self::Error> {
         match self {
-            Dtype::Int { .. } => regalloc2::RegClass::Int,
-            Dtype::Float { .. } => regalloc2::RegClass::Float,
+            Dtype::Int { .. } => Ok(regalloc2::RegClass::Int),
+            Dtype::Float { .. } => Ok(regalloc2::RegClass::Float),
             Dtype::Pointer { .. }
             | Dtype::Struct { .. }
             | Dtype::Array { .. }
             | Dtype::Function { .. }
             | Dtype::Typedef { .. }
-            | Dtype::Unit { .. } => unreachable!(),
+            | Dtype::Unit { .. } => Err(()),
         }
     }
 }
