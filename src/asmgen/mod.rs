@@ -1,5 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
+mod mesh;
+
 use crate::asm::{
     self, DataSize, Directive, IType, Immediate, Label, Pseudo, RType, Register, SType, Section,
     TranslationUnit,
@@ -19,6 +21,36 @@ use petgraph::visit::IntoNodeIdentifiers;
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
+
+static INT_OFFSETS: [(Register, i64); 12] = [
+    (Register::S0, 16),
+    (Register::S1, 24),
+    (Register::S2, 32),
+    (Register::S3, 40),
+    (Register::S4, 48),
+    (Register::S5, 56),
+    (Register::S6, 64),
+    (Register::S7, 72),
+    (Register::S8, 80),
+    (Register::S9, 88),
+    (Register::S10, 96),
+    (Register::S11, 104),
+];
+
+static FLOAT_OFFSETS: [(Register, i64); 12] = [
+    (Register::FS0, 112),
+    (Register::FS1, 120),
+    (Register::FS2, 128),
+    (Register::FS3, 136),
+    (Register::FS4, 144),
+    (Register::FS5, 152),
+    (Register::FS6, 160),
+    (Register::FS7, 168),
+    (Register::FS8, 176),
+    (Register::FS9, 184),
+    (Register::FS10, 192),
+    (Register::FS11, 200),
+];
 
 static INT_REGISTERS: [Register; 21] = [
     Register::S1,
@@ -541,6 +573,36 @@ fn translate_function(
     }
     let stack_offset_2_s0 = stack_offset_2_s0;
 
+    let mut temp_block: Vec<asm::Block> = vec![];
+
+    for (&bid, block) in definition.blocks.iter() {
+        let instructions = translate_block(
+            func_name,
+            bid,
+            block,
+            &mut temp_block,
+            &register_mp,
+            source,
+            function_abi_mp,
+            float_mp,
+        );
+        function.blocks.push(asm::Block {
+            label: Some(Label::new(func_name, bid)),
+            instructions,
+        });
+    }
+
+    function.blocks.extend(temp_block);
+
+    let used_registers: HashSet<Register> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .flat_map(|instruction| instruction.walk_register())
+        .chain(once(Register::S0)) // always backup S0
+        .collect();
+    let is_used = |x: &&(Register, i64)| -> bool { used_registers.contains(&x.0) };
+
     let backup_ra: Vec<crate::asm::Instruction> = mk_stype(
         asm::SType::SD,
         Register::Sp,
@@ -554,333 +616,60 @@ fn translate_function(
         (-stack_offset_2_s0 - 8) as u64,
     );
 
-    let mut backup_sx: Vec<crate::asm::Instruction> = vec![];
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S0,
-        (-stack_offset_2_s0 - 16) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S1,
-        (-stack_offset_2_s0 - 24) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S2,
-        (-stack_offset_2_s0 - 32) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S3,
-        (-stack_offset_2_s0 - 40) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S4,
-        (-stack_offset_2_s0 - 48) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S5,
-        (-stack_offset_2_s0 - 56) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S6,
-        (-stack_offset_2_s0 - 64) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S7,
-        (-stack_offset_2_s0 - 72) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S8,
-        (-stack_offset_2_s0 - 80) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S9,
-        (-stack_offset_2_s0 - 88) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S10,
-        (-stack_offset_2_s0 - 96) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::SD,
-        Register::Sp,
-        Register::S11,
-        (-stack_offset_2_s0 - 104) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS0,
-        (-stack_offset_2_s0 - 112) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS1,
-        (-stack_offset_2_s0 - 120) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS2,
-        (-stack_offset_2_s0 - 128) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS3,
-        (-stack_offset_2_s0 - 136) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS4,
-        (-stack_offset_2_s0 - 144) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS5,
-        (-stack_offset_2_s0 - 152) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS6,
-        (-stack_offset_2_s0 - 160) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS7,
-        (-stack_offset_2_s0 - 168) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS8,
-        (-stack_offset_2_s0 - 176) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS9,
-        (-stack_offset_2_s0 - 184) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS10,
-        (-stack_offset_2_s0 - 192) as u64,
-    ));
-    backup_sx.extend(mk_stype(
-        asm::SType::Store(DataSize::DoublePrecision),
-        Register::Sp,
-        Register::FS11,
-        (-stack_offset_2_s0 - 200) as u64,
-    ));
+    let backup_sx: Vec<crate::asm::Instruction> = INT_OFFSETS
+        .iter()
+        .filter(is_used)
+        .flat_map(|(rs2, offset)| {
+            mk_stype(
+                asm::SType::SD,
+                Register::Sp,
+                *rs2,
+                (-stack_offset_2_s0 - *offset) as u64,
+            )
+        })
+        .chain(
+            FLOAT_OFFSETS
+                .iter()
+                .filter(is_used)
+                .flat_map(|(rs2, offset)| {
+                    mk_stype(
+                        asm::SType::Store(DataSize::DoublePrecision),
+                        Register::Sp,
+                        *rs2,
+                        (-stack_offset_2_s0 - *offset) as u64,
+                    )
+                }),
+        )
+        .collect();
 
-    let mut restore_sx: Vec<crate::asm::Instruction> = vec![];
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S0,
-        Register::Sp,
-        (-stack_offset_2_s0 - 16) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S1,
-        Register::Sp,
-        (-stack_offset_2_s0 - 24) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S2,
-        Register::Sp,
-        (-stack_offset_2_s0 - 32) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S3,
-        Register::Sp,
-        (-stack_offset_2_s0 - 40) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S4,
-        Register::Sp,
-        (-stack_offset_2_s0 - 48) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S5,
-        Register::Sp,
-        (-stack_offset_2_s0 - 56) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S6,
-        Register::Sp,
-        (-stack_offset_2_s0 - 64) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S7,
-        Register::Sp,
-        (-stack_offset_2_s0 - 72) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S8,
-        Register::Sp,
-        (-stack_offset_2_s0 - 80) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S9,
-        Register::Sp,
-        (-stack_offset_2_s0 - 88) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S10,
-        Register::Sp,
-        (-stack_offset_2_s0 - 96) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::LD,
-        Register::S11,
-        Register::Sp,
-        (-stack_offset_2_s0 - 104) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS0,
-        Register::Sp,
-        (-stack_offset_2_s0 - 112) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS1,
-        Register::Sp,
-        (-stack_offset_2_s0 - 120) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS2,
-        Register::Sp,
-        (-stack_offset_2_s0 - 128) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS3,
-        Register::Sp,
-        (-stack_offset_2_s0 - 136) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS4,
-        Register::Sp,
-        (-stack_offset_2_s0 - 144) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS5,
-        Register::Sp,
-        (-stack_offset_2_s0 - 152) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS6,
-        Register::Sp,
-        (-stack_offset_2_s0 - 160) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS7,
-        Register::Sp,
-        (-stack_offset_2_s0 - 168) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS8,
-        Register::Sp,
-        (-stack_offset_2_s0 - 176) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS9,
-        Register::Sp,
-        (-stack_offset_2_s0 - 184) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS10,
-        Register::Sp,
-        (-stack_offset_2_s0 - 192) as u64,
-    ));
-    restore_sx.extend(mk_itype(
-        asm::IType::Load {
-            data_size: DataSize::DoublePrecision,
-            is_signed: true,
-        },
-        Register::FS11,
-        Register::Sp,
-        (-stack_offset_2_s0 - 200) as u64,
-    ));
+    let restore_sx: Vec<crate::asm::Instruction> = INT_OFFSETS
+        .iter()
+        .filter(is_used)
+        .flat_map(|(rd, offset)| {
+            mk_itype(
+                asm::IType::LD,
+                *rd,
+                Register::Sp,
+                (-stack_offset_2_s0 - *offset) as u64,
+            )
+        })
+        .chain(
+            FLOAT_OFFSETS
+                .iter()
+                .filter(is_used)
+                .flat_map(|(rd, offset)| {
+                    mk_itype(
+                        asm::IType::Load {
+                            data_size: DataSize::DoublePrecision,
+                            is_signed: true,
+                        },
+                        *rd,
+                        Register::Sp,
+                        (-stack_offset_2_s0 - *offset) as u64,
+                    )
+                }),
+        )
+        .collect();
 
     let mut backup_ra_and_init_sp = mk_itype(
         asm::IType::Addi(DataSize::Double),
@@ -908,27 +697,6 @@ fn translate_function(
         (-stack_offset_2_s0) as u64,
     ));
     before_ret_instructions.push(asm::Instruction::Pseudo(Pseudo::Ret));
-
-    let mut temp_block: Vec<asm::Block> = vec![];
-
-    for (&bid, block) in definition.blocks.iter() {
-        let instructions = translate_block(
-            func_name,
-            bid,
-            block,
-            &mut temp_block,
-            &register_mp,
-            source,
-            function_abi_mp,
-            float_mp,
-        );
-        function.blocks.push(asm::Block {
-            label: Some(Label::new(func_name, bid)),
-            instructions,
-        });
-    }
-
-    function.blocks.extend(temp_block);
 
     for b in function.blocks.iter_mut() {
         match b.instructions.last().unwrap() {
