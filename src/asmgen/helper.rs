@@ -110,6 +110,8 @@ pub struct Gape {
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
     pub constant_in_jumparg_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
+
+    num_vregs: usize,
 }
 
 impl Gape {
@@ -282,6 +284,9 @@ impl Gape {
                     .collect(),
             ),
             blocks,
+            reg_mp: Frozen::freeze(reg_mp),
+            abi,
+            num_vregs: a,
         }
     }
 }
@@ -726,15 +731,7 @@ impl regalloc2::Function for Gape {
     }
 
     fn num_vregs(&self) -> usize {
-        self.blocks
-            .values()
-            .fold(0, |acc, b| acc + b.instructions.len() + b.phinodes.len())
-            + self
-                .constant_in_jumparg_mp
-                .values()
-                .flatten()
-                .flatten()
-                .count()
+        self.num_vregs
     }
 
     fn spillslot_size(&self, regclass: regalloc2::RegClass) -> usize {
