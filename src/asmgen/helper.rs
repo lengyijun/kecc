@@ -679,48 +679,7 @@ impl regalloc2::Function for Gape {
                 | ir::Instruction::BinOp { .. }
                 | ir::Instruction::Nop
                 | ir::Instruction::Load { .. } => regalloc2::PRegSet::empty(),
-                ir::Instruction::Call { .. } => {
-                    let mut res = regalloc2::PRegSet::empty();
-                    res.add(Register::T0.into());
-                    res.add(Register::T1.into());
-                    res.add(Register::T2.into());
-                    res.add(Register::T3.into());
-                    res.add(Register::T4.into());
-                    res.add(Register::T5.into());
-                    res.add(Register::T6.into());
-
-                    res.add(Register::FT0.into());
-                    res.add(Register::FT1.into());
-                    res.add(Register::FT2.into());
-                    res.add(Register::FT3.into());
-                    res.add(Register::FT4.into());
-                    res.add(Register::FT5.into());
-                    res.add(Register::FT6.into());
-                    res.add(Register::FT7.into());
-                    res.add(Register::FT8.into());
-                    res.add(Register::FT9.into());
-                    res.add(Register::FT10.into());
-                    res.add(Register::FT11.into());
-
-                    res.add(Register::A0.into());
-                    res.add(Register::A1.into());
-                    res.add(Register::A2.into());
-                    res.add(Register::A3.into());
-                    res.add(Register::A4.into());
-                    res.add(Register::A5.into());
-                    res.add(Register::A6.into());
-                    res.add(Register::A7.into());
-
-                    res.add(Register::FA0.into());
-                    res.add(Register::FA1.into());
-                    res.add(Register::FA2.into());
-                    res.add(Register::FA3.into());
-                    res.add(Register::FA4.into());
-                    res.add(Register::FA5.into());
-                    res.add(Register::FA6.into());
-                    res.add(Register::FA7.into());
-                    res
-                }
+                ir::Instruction::Call { .. } => whole_pregset(),
             },
             Yank::BeforeFirst | Yank::AllocateConstBeforeJump | Yank::BlockExit => {
                 regalloc2::PRegSet::empty()
@@ -896,4 +855,47 @@ pub fn allocation_2_reg(allocation: Allocation, or_register: Register) -> Regist
         regalloc2::AllocationKind::Reg => allocation.as_reg().unwrap().into(),
         regalloc2::AllocationKind::Stack => todo!(),
     }
+}
+
+fn whole_pregset() -> regalloc2::PRegSet {
+    let mut res = regalloc2::PRegSet::empty();
+    res.add(Register::T0.into());
+    res.add(Register::T1.into());
+    res.add(Register::T2.into());
+    res.add(Register::T3.into());
+    res.add(Register::T4.into());
+    res.add(Register::T5.into());
+    res.add(Register::T6.into());
+
+    res.add(Register::FT0.into());
+    res.add(Register::FT1.into());
+    res.add(Register::FT2.into());
+    res.add(Register::FT3.into());
+    res.add(Register::FT4.into());
+    res.add(Register::FT5.into());
+    res.add(Register::FT6.into());
+    res.add(Register::FT7.into());
+    res.add(Register::FT8.into());
+    res.add(Register::FT9.into());
+    res.add(Register::FT10.into());
+    res.add(Register::FT11.into());
+
+    res.add(Register::A0.into());
+    res.add(Register::A1.into());
+    res.add(Register::A2.into());
+    res.add(Register::A3.into());
+    res.add(Register::A4.into());
+    res.add(Register::A5.into());
+    res.add(Register::A6.into());
+    res.add(Register::A7.into());
+
+    res.add(Register::FA0.into());
+    res.add(Register::FA1.into());
+    res.add(Register::FA2.into());
+    res.add(Register::FA3.into());
+    res.add(Register::FA4.into());
+    res.add(Register::FA5.into());
+    res.add(Register::FA6.into());
+    res.add(Register::FA7.into());
+    res
 }
