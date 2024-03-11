@@ -208,7 +208,7 @@ impl Gape {
         block_mp
     }
 
-    fn init_constant_mp(
+    fn init_constant_in_jumparg(
         blocks: &BTreeMap<BlockId, ir::Block>,
         mut next_virt_reg: impl FnMut() -> usize,
     ) -> BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>> {
@@ -272,9 +272,7 @@ impl Gape {
 
         Self {
             bid_init,
-            abi,
             constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_mp(&blocks, f)),
-            reg_mp,
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
             pred_mp: Frozen::freeze(
