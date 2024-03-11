@@ -920,7 +920,7 @@ fn translate_function(
             &register_mp,
             source,
             function_abi_mp,
-            before_ret_instructions.clone(),
+            &before_ret_instructions,
             float_mp,
         );
         function.blocks.push(asm::Block {
@@ -1658,7 +1658,7 @@ fn translate_block(
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
-    before_ret_instructions: Vec<asm::Instruction>,
+    before_ret_instructions: &Vec<asm::Instruction>,
     float_mp: &mut FloatMp,
 ) -> Vec<asm::Instruction> {
     let mut res = vec![];
@@ -5060,7 +5060,7 @@ fn translate_block(
                 },
                 _ => unreachable!(),
             }
-            res.extend(before_ret_instructions);
+            res.extend(before_ret_instructions.clone());
         }
         ir::BlockExit::Unreachable => unreachable!(),
     }
