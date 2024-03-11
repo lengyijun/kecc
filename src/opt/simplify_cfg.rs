@@ -62,67 +62,9 @@ pub struct SimplifyCfgEmpty {}
 
 impl Optimize<FunctionDefinition> for SimplifyCfgConstProp {
     fn optimize(&mut self, code: &mut FunctionDefinition) -> bool {
-        let mut res = false;
-        'outer: for block in code.blocks.values_mut() {
-            match &block.exit {
-                BlockExit::ConditionalJump {
-                    condition: ir::Operand::Constant(ir::Constant::Int { value, .. }),
-                    arg_then,
-                    arg_else,
-                } => {
-                    res = true;
-                    if (value & 1) == 1 {
-                        block.exit = BlockExit::Jump {
-                            arg: arg_then.clone(),
-                        };
-                    } else {
-                        block.exit = BlockExit::Jump {
-                            arg: arg_else.clone(),
-                        };
-                    }
-                }
-                BlockExit::ConditionalJump {
-                    arg_then, arg_else, ..
-                } => {
-                    if arg_then == arg_else {
-                        res = true;
-                        block.exit = BlockExit::Jump {
-                            arg: arg_then.clone(),
-                        };
-                    }
-                }
-                BlockExit::Switch {
-                    value: ir::Operand::Constant(c),
-                    default,
-                    cases,
-                } => {
-                    res = true;
-                    for (x, arg) in cases {
-                        if c == x {
-                            block.exit = BlockExit::Jump { arg: arg.clone() };
-                            continue 'outer;
-                        }
-                    }
-                    block.exit = BlockExit::Jump {
-                        arg: default.clone(),
-                    };
-                }
-                BlockExit::Switch { default, cases, .. } => {
-                    let b = cases
-                        .iter()
-                        .map(|(_, jump_arg)| jump_arg == default)
-                        .all(|x| x);
-                    if b {
-                        res = true;
-                        block.exit = BlockExit::Jump {
-                            arg: default.clone(),
-                        };
-                    }
-                }
-                _ => {}
-            }
-        }
-        res
+        code.blocks
+            .values_mut()
+            .fold(false, |a, b| a | b.exit.optimize())
     }
 }
 
@@ -433,6 +375,70 @@ impl BlockExit {
                     .chain(once(default.bid)),
             ),
             BlockExit::Return { .. } | BlockExit::Unreachable => Box::new(empty()),
+        }
+    }
+
+    pub fn optimize(&mut self) -> bool {
+        match &self {
+            BlockExit::ConditionalJump {
+                condition: ir::Operand::Constant(ir::Constant::Int { value, .. }),
+                arg_then,
+                arg_else,
+            } => {
+                if (value & 1) == 1 {
+                    *self = BlockExit::Jump {
+                        arg: arg_then.clone(),
+                    };
+                } else {
+                    *self = BlockExit::Jump {
+                        arg: arg_else.clone(),
+                    };
+                }
+                true
+            }
+            BlockExit::ConditionalJump {
+                arg_then, arg_else, ..
+            } => {
+                if arg_then == arg_else {
+                    *self = BlockExit::Jump {
+                        arg: arg_then.clone(),
+                    };
+                    true
+                } else {
+                    false
+                }
+            }
+            BlockExit::Switch {
+                value: ir::Operand::Constant(c),
+                default,
+                cases,
+            } => {
+                for (x, arg) in cases {
+                    if c == x {
+                        *self = BlockExit::Jump { arg: arg.clone() };
+                        return true;
+                    }
+                }
+                *self = BlockExit::Jump {
+                    arg: default.clone(),
+                };
+                true
+            }
+            BlockExit::Switch { default, cases, .. } => {
+                if cases
+                    .iter()
+                    .map(|(_, jump_arg)| jump_arg == default)
+                    .all(|x| x)
+                {
+                    *self = BlockExit::Jump {
+                        arg: default.clone(),
+                    };
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
     }
 }
