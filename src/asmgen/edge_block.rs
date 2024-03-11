@@ -65,8 +65,6 @@ impl Gape {
                         unreachable!()
                     };
                 }
-                // remove unreachable blocks
-                let _ = SimplifyCfgReach::optimize_inner(self.bid_init, &mut self.blocks);
                 self = Self::new(self.blocks, self.bid_init, self.abi);
             } else {
                 break;

@@ -17,6 +17,7 @@ use crate::{
         self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand,
         RegisterId,
     },
+    SimplifyCfgReach,
 };
 
 use super::{load_operand_to_reg, FloatMp, FunctionAbi};
@@ -245,7 +246,17 @@ impl Gape {
         Self::new(definition.blocks.clone(), definition.bid_init, abi)
     }
 
-    pub fn new(blocks: BTreeMap<BlockId, ir::Block>, bid_init: BlockId, abi: FunctionAbi) -> Self {
+    pub fn new(
+        mut blocks: BTreeMap<BlockId, ir::Block>,
+        bid_init: BlockId,
+        abi: FunctionAbi,
+    ) -> Self {
+        for b in blocks.values_mut() {
+            let _ = b.exit.optimize();
+        }
+        // remove unreachable blocks
+        let _ = SimplifyCfgReach::optimize_inner(bid_init, &mut blocks);
+
         let reg_mp = Frozen::freeze(Self::init_reg_mp(&blocks));
         let mut a = reg_mp.len();
         let f = || -> usize {
