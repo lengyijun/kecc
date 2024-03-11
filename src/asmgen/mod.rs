@@ -920,7 +920,6 @@ fn translate_function(
             &register_mp,
             source,
             function_abi_mp,
-            &before_ret_instructions,
             float_mp,
         );
         function.blocks.push(asm::Block {
@@ -930,6 +929,18 @@ fn translate_function(
     }
 
     function.blocks.extend(temp_block);
+
+    for b in function.blocks.iter_mut() {
+        match b.instructions.last().unwrap() {
+            asm::Instruction::Pseudo(Pseudo::Ret) => {
+                let Some(asm::Instruction::Pseudo(Pseudo::Ret)) = b.instructions.pop() else {
+                    unreachable!()
+                };
+                b.instructions.extend(before_ret_instructions.clone());
+            }
+            _ => {}
+        }
+    }
 
     let init_block = function.blocks.first_mut().unwrap();
     assert_eq!(
@@ -1658,7 +1669,6 @@ fn translate_block(
     register_mp: &HashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
-    before_ret_instructions: &Vec<asm::Instruction>,
     float_mp: &mut FloatMp,
 ) -> Vec<asm::Instruction> {
     let mut res = vec![];
@@ -5060,7 +5070,7 @@ fn translate_block(
                 },
                 _ => unreachable!(),
             }
-            res.extend(before_ret_instructions.clone());
+            res.push(asm::Instruction::Pseudo(Pseudo::Ret));
         }
         ir::BlockExit::Unreachable => unreachable!(),
     }
