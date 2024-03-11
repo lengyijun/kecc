@@ -4917,22 +4917,36 @@ fn translate_block(
             match value.dtype() {
                 ir::Dtype::Unit { .. } => {}
                 ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                    store_operand_to_reg(
-                        value.clone(),
-                        Register::A0,
-                        &mut res,
-                        register_mp,
-                        float_mp,
-                    );
+                    match value {
+                        ir::Operand::Constant(_) => {
+                            store_operand_to_reg(
+                                value.clone(),
+                                Register::A0,
+                                &mut res,
+                                register_mp,
+                                float_mp,
+                            );
+                        }
+                        ir::Operand::Register { .. } => {
+                            // already in regalloc2
+                        }
+                    }
                 }
                 ir::Dtype::Float { .. } => {
-                    store_operand_to_reg(
-                        value.clone(),
-                        Register::FA0,
-                        &mut res,
-                        register_mp,
-                        float_mp,
-                    );
+                    match value {
+                        ir::Operand::Constant(_) => {
+                            store_operand_to_reg(
+                                value.clone(),
+                                Register::A0,
+                                &mut res,
+                                register_mp,
+                                float_mp,
+                            );
+                        }
+                        ir::Operand::Register { .. } => {
+                            // already in regalloc2
+                        }
+                    }
                 }
                 ir::Dtype::Struct { .. } => match value {
                     ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
