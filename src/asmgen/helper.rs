@@ -165,6 +165,7 @@ impl Gape {
 
         for (rid, dtype) in arg_iter.chain(used_register_iter) {
             match dtype {
+                // struct : block paramter may be indirect register
                 Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Struct { .. } => {
                     match reg_mp.insert_no_overwrite(
                         rid,
