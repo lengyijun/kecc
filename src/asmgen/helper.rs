@@ -272,7 +272,7 @@ impl Gape {
 
         Self {
             bid_init,
-            constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_mp(&blocks, f)),
+            constant_in_jumparg_mp: Frozen::freeze(Self::init_constant_in_jumparg(&blocks, f)),
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
             pred_mp: Frozen::freeze(
@@ -282,7 +282,7 @@ impl Gape {
                     .collect(),
             ),
             blocks,
-            reg_mp: Frozen::freeze(reg_mp),
+            reg_mp,
             abi,
             num_vregs: a,
         }
