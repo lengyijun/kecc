@@ -660,7 +660,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 let rid = RegisterId::Temp { bid, iid };
                 match instruction.dtype() {
                     Dtype::Unit { .. } => {}
-                    Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                    Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Float { .. } => {
                         match self.reg_mp.get_by_left(&rid) {
                             Some(dest) => v.push(regalloc2::Operand::new(
                                 *dest,
@@ -674,12 +674,6 @@ impl<'a> regalloc2::Function for Gape<'a> {
                             }
                         }
                     }
-                    Dtype::Float { .. } => v.push(regalloc2::Operand::new(
-                        *self.reg_mp.get_by_left(&rid).unwrap(),
-                        regalloc2::OperandConstraint::Any,
-                        regalloc2::OperandKind::Def,
-                        regalloc2::OperandPos::Late,
-                    )),
 
                     Dtype::Array { .. } => unreachable!(),
                     Dtype::Struct { .. } => {}
