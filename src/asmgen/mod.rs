@@ -4943,6 +4943,20 @@ fn gen_jump_arg_or_new_block(
     }
 }
 
+fn load_int_to_reg(c: ir::Constant, register: Register) -> Vec<asm::Instruction> {
+    if let ir::Constant::Int { value, .. } = c {
+        let data_size = DataSize::try_from(c.dtype()).unwrap();
+        mk_itype(
+            IType::Addi(data_size),
+            register,
+            Register::Zero,
+            value as u64 & data_size.mask(),
+        )
+    } else {
+        unreachable!()
+    }
+}
+
 /// may use T0
 /// is operand is constant: store in or_register
 fn load_operand_to_reg(
@@ -4953,14 +4967,8 @@ fn load_operand_to_reg(
     float_mp: &mut FloatMp,
 ) -> Register {
     match operand {
-        ir::Operand::Constant(ir::Constant::Int { value, .. }) => {
-            let data_size = DataSize::try_from(operand.dtype()).unwrap();
-            res.extend(mk_itype(
-                IType::Addi(data_size),
-                or_register,
-                Register::Zero,
-                value as u64 & data_size.mask(),
-            ));
+        ir::Operand::Constant(c @ ir::Constant::Int { .. }) => {
+            res.extend(load_int_to_reg(c, or_register));
             or_register
         }
         ir::Operand::Constant(ref c @ ir::Constant::Float { value, width }) => {
