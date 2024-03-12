@@ -4957,6 +4957,30 @@ fn load_int_to_reg(c: ir::Constant, register: Register) -> Vec<asm::Instruction>
     }
 }
 
+fn load_float_to_reg(
+    c: ir::Constant,
+    register: Register,
+    float_mp: &mut FloatMp,
+) -> Vec<asm::Instruction> {
+    if let ir::Constant::Float { value, width } = c {
+        let mut res = Vec::new();
+        let label = float_mp.get_label(Float { value, width });
+        res.push(asm::Instruction::Pseudo(Pseudo::La {
+            rd: Register::T0,
+            symbol: label,
+        }));
+        res.push(asm::Instruction::IType {
+            instr: IType::load(c.dtype()),
+            rd: register,
+            rs1: Register::T0,
+            imm: Immediate::Value(0),
+        });
+        res
+    } else {
+        unreachable!()
+    }
+}
+
 /// may use T0
 /// is operand is constant: store in or_register
 fn load_operand_to_reg(
@@ -4971,18 +4995,8 @@ fn load_operand_to_reg(
             res.extend(load_int_to_reg(c, or_register));
             or_register
         }
-        ir::Operand::Constant(ref c @ ir::Constant::Float { value, width }) => {
-            let label = float_mp.get_label(Float { value, width });
-            res.push(asm::Instruction::Pseudo(Pseudo::La {
-                rd: Register::T0,
-                symbol: label,
-            }));
-            res.push(asm::Instruction::IType {
-                instr: IType::load(c.dtype()),
-                rd: or_register,
-                rs1: Register::T0,
-                imm: Immediate::Value(0),
-            });
+        ir::Operand::Constant(c @ ir::Constant::Float { .. }) => {
+            res.extend(load_float_to_reg(c, or_register, float_mp));
             or_register
         }
         ir::Operand::Constant(ir::Constant::GlobalVariable {
