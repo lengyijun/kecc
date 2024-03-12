@@ -100,11 +100,15 @@ pub enum Yank {
 
 #[derive(Debug)]
 pub struct Gape {
-    /// copy from `FunctionDefinition`
+    /// invariant: 
+    /// 1. no unreachable block
+    /// 2. no switch(constant)
+    /// 3. no ConditionalJump(constant) 
     pub blocks: BTreeMap<BlockId, ir::Block>,
     pub bid_init: BlockId,
 
     pub pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
+    /// abi of current function
     pub abi: FunctionAbi,
     pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
