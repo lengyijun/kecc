@@ -4940,14 +4940,8 @@ fn translate_block(
                 ir::Dtype::Unit { .. } => {}
                 ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
                     match value {
-                        ir::Operand::Constant(_) => {
-                            store_operand_to_reg(
-                                value.clone(),
-                                Register::A0,
-                                &mut res,
-                                register_mp,
-                                float_mp,
-                            );
+                        ir::Operand::Constant(c) => {
+                            load_constant_to_reg(c.clone(), Register::A0, &mut res, float_mp);
                         }
                         ir::Operand::Register { .. } => {
                             // already in regalloc2
@@ -4956,14 +4950,8 @@ fn translate_block(
                 }
                 ir::Dtype::Float { .. } => {
                     match value {
-                        ir::Operand::Constant(_) => {
-                            store_operand_to_reg(
-                                value.clone(),
-                                Register::A0,
-                                &mut res,
-                                register_mp,
-                                float_mp,
-                            );
+                        ir::Operand::Constant(c) => {
+                            load_constant_to_reg(c.clone(), Register::A0, &mut res, float_mp);
                         }
                         ir::Operand::Register { .. } => {
                             // already in regalloc2
@@ -5148,7 +5136,7 @@ fn load_int_to_reg(c: ir::Constant, register: Register) -> Vec<asm::Instruction>
             value as u64 & data_size.mask(),
         )
     } else {
-        unreachable!()
+        unreachable!("{}", c)
     }
 }
 
