@@ -3702,38 +3702,15 @@ fn translate_block(
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
-            ir::Instruction::Call { callee, args, .. } => {
-                let (
-                    params_dtype,
-                    ret_dtype,
-                    FunctionAbi {
-                        params_alloc,
-                        caller_alloc,
-                    },
-                ) = match callee {
-                    ir::Operand::Constant(ir::Constant::GlobalVariable {
-                        dtype: ir::Dtype::Function { ret, params },
-                        name,
-                    }) => (
-                        params,
-                        ret.as_ref(),
-                        function_abi_mp.get(name).unwrap().clone(),
-                    ),
-                    ir::Operand::Register {
-                        dtype: ir::Dtype::Pointer { inner, .. },
-                        ..
-                    } => {
-                        let ir::Dtype::Function { ret, params } = &**inner else {
-                            unreachable!()
-                        };
-                        let function_signature = FunctionSignature {
-                            ret: (**ret).clone(),
-                            params: params.clone(),
-                        };
-                        (params, ret.as_ref(), function_signature.try_alloc(source))
-                    }
-                    _ => unreachable!(),
-                };
+            ir::Instruction::Call {
+                callee,
+                args,
+                return_type,
+            } => {
+                let FunctionAbi {
+                    params_alloc,
+                    caller_alloc,
+                } = clown(callee, function_abi_mp, source);
                 if caller_alloc != 0 {
                     res.extend(mk_itype(
                         IType::Addi(DataSize::Double),
@@ -3746,7 +3723,7 @@ fn translate_block(
                 let mut to_be_cp_parallel: Vec<(Register, Register, ir::Dtype)> = Vec::new();
                 let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
 
-                for (operand, alloc, dtype) in izip!(args, params_alloc, params_dtype) {
+                for (operand, alloc) in izip!(args, params_alloc) {
                     match (alloc, operand) {
                         (
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
@@ -3804,7 +3781,7 @@ fn translate_block(
                             )),
                             ir::Operand::Register { .. },
                         ) => {
-                            unreachable!("{dtype}")
+                            unreachable!("{}", operand.dtype())
                         }
                         (
                             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
@@ -3835,7 +3812,7 @@ fn translate_block(
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Reg(src_reg)) => {
                                 if *src_reg != target_reg {
-                                    to_be_cp_parallel.push((*src_reg, target_reg, dtype.clone()));
+                                    to_be_cp_parallel.push((*src_reg, target_reg, operand.dtype()));
                                 }
                             }
                             DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })
@@ -3981,7 +3958,7 @@ fn translate_block(
                 res.extend(cp_parallel(to_be_cp_parallel));
                 res.extend(after_cp_parallel);
 
-                match ret_dtype {
+                match return_type {
                     ir::Dtype::Struct { .. } => {
                         let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
                             register_mp.get(&RegisterId::Temp { bid, iid }).unwrap()
@@ -4035,7 +4012,7 @@ fn translate_block(
                     _ => unreachable!(),
                 }
 
-                match ret_dtype {
+                match return_type {
                     ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
                         match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
                             DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
@@ -4046,7 +4023,7 @@ fn translate_block(
                             }
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                                 res.extend(mk_stype(
-                                    SType::store(ret_dtype.clone()),
+                                    SType::store(return_type.clone()),
                                     Register::S0,
                                     Register::A0,
                                     *offset_to_s0 as u64,
@@ -4065,12 +4042,12 @@ fn translate_block(
                                 res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
                                     rd: *dest_reg,
                                     rs: Register::FA0,
-                                    data_size: DataSize::try_from(ret_dtype.clone()).unwrap(),
+                                    data_size: DataSize::try_from(return_type.clone()).unwrap(),
                                 }));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                                 res.extend(mk_stype(
-                                    SType::store(ret_dtype.clone()),
+                                    SType::store(return_type.clone()),
                                     Register::S0,
                                     Register::FA0,
                                     *offset_to_s0 as u64,
@@ -4844,6 +4821,33 @@ fn translate_block(
     }
 
     res
+}
+
+fn clown<'a>(
+    callee: &'a ir::Operand,
+    function_abi_mp: &HashMap<String, FunctionAbi>,
+    source: &ir::TranslationUnit,
+) -> FunctionAbi {
+    match callee {
+        ir::Operand::Constant(ir::Constant::GlobalVariable {
+            dtype: ir::Dtype::Function { .. },
+            name,
+        }) => function_abi_mp.get(name).unwrap().clone(),
+        ir::Operand::Register {
+            dtype: ir::Dtype::Pointer { inner, .. },
+            ..
+        } => {
+            let ir::Dtype::Function { ret, params } = &**inner else {
+                unreachable!()
+            };
+            let function_signature = FunctionSignature {
+                ret: (**ret).clone(),
+                params: params.clone(),
+            };
+            function_signature.try_alloc(source)
+        }
+        _ => unreachable!(),
+    }
 }
 
 // prepare args to jump block
