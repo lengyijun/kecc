@@ -20,7 +20,7 @@ use crate::{
     SimplifyCfgReach,
 };
 
-use super::{load_operand_to_reg, FloatMp, FunctionAbi};
+use super::{load_float_to_reg, load_int_to_reg, FloatMp, FunctionAbi};
 
 impl Into<regalloc2::RegClass> for RegisterType {
     fn into(self) -> regalloc2::RegClass {
@@ -834,15 +834,13 @@ pub fn constant_2_allocation(
             let reg: Register = allocation.as_reg().unwrap().into();
             match c {
                 Constant::Undef { .. } | Constant::Unit => unreachable!(),
-                Constant::Float { .. } | Constant::Int { .. } => {
-                    // TODO: constant_2_register
-                    load_operand_to_reg(
-                        Operand::Constant(c),
-                        reg,
-                        res,
-                        &mut LinkedHashMap::new(), // useless
-                        float_mp,
-                    )
+                Constant::Float { .. } => {
+                    res.extend(load_float_to_reg(c, reg, float_mp));
+                    reg
+                }
+                Constant::Int { .. } => {
+                    res.extend(load_int_to_reg(c, reg));
+                    reg
                 }
                 Constant::GlobalVariable { .. } => unreachable!(),
             }
