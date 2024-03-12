@@ -1561,14 +1561,36 @@ fn translate_block(
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => match rid {
                     RegisterId::Local { .. } => unreachable!(),
-                    RegisterId::Arg { bid, .. } => {
+                    RegisterId::Arg { bid, aid } => {
                         if bid == gape.bid_init {
-                            let _ = register_mp.insert(
-                                rid,
-                                DirectOrInDirect::InDirect(RegOrStack::Reg(
-                                    allocations.next().unwrap(),
-                                )),
-                            );
+                            match &gape.abi.params_alloc[aid] {
+                                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                    RegOrStack::Reg(_),
+                                ))
+                                | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                    RegOrStack::Reg(_),
+                                )) => {
+                                    let _ = register_mp.insert(
+                                        rid,
+                                        DirectOrInDirect::InDirect(RegOrStack::Reg(
+                                            allocations.next().unwrap(),
+                                        )),
+                                    );
+                                }
+                                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                    RegOrStack::Stack { .. },
+                                ))
+                                | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                    RegOrStack::Stack { .. },
+                                )) => {
+                                    // do nothing
+                                }
+                                ParamAlloc::PrimitiveType(_) => unreachable!(),
+                                ParamAlloc::StructInRegister(_) => {
+                                    // on stack
+                                    // do nothing
+                                }
+                            }
                         } else {
                             unreachable!()
                         }

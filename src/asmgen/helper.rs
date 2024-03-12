@@ -616,7 +616,9 @@ impl regalloc2::Function for Gape {
                                             super::ParamAlloc::PrimitiveType(
                                                 DirectOrInDirect::InDirect(_),
                                             ) => unreachable!(),
-                                            super::ParamAlloc::StructInRegister(_) => todo!(),
+                                            super::ParamAlloc::StructInRegister(_) => {
+                                                // always on stack
+                                            }
                                         }
                                     } else {
                                         unreachable!()
