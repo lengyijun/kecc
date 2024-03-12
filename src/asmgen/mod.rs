@@ -441,8 +441,12 @@ fn translate_function(
     // before gen detailed asm::Instruction
     // we need to allocate register first
     // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
-    let gape =
-        helper::Gape::from_definition(definition, function_abi_mp.get(func_name).unwrap().clone());
+    let gape = helper::Gape::from_definition(
+        definition,
+        function_abi_mp.get(func_name).unwrap().clone(),
+        function_abi_mp,
+        source,
+    );
     let gape = Gape::foo(gape);
     let gape = Gape::add_edge_block(gape);
     let output = regalloc2::run(
@@ -1491,7 +1495,7 @@ fn translate_block(
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     float_mp: &mut FloatMp,
-    gape: &Gape,
+    gape: &Gape<'_>,
     output: &regalloc2::Output,
 ) -> Vec<asm::Instruction> {
     let mut res = vec![];

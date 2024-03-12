@@ -3,7 +3,7 @@ use crate::ir::{Block, BlockId, JumpArg, Operand};
 use itertools::Itertools;
 use std::ops::Deref;
 
-impl Gape {
+impl<'a> Gape<'a> {
     /// deal with examples/c/cond.c
     /// found this bug in `test_examples_end_to_end`
     pub fn foo(mut self) -> Self {
@@ -62,6 +62,12 @@ impl Gape {
 
         self.blocks.extend(new_blocks);
 
-        Self::new(self.blocks, self.bid_init, self.abi)
+        Self::new(
+            self.blocks,
+            self.bid_init,
+            self.abi,
+            self.function_abi_mp,
+            self.source,
+        )
     }
 }

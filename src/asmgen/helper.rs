@@ -99,13 +99,17 @@ pub enum Yank {
 }
 
 #[derive(Debug)]
-pub struct Gape {
-    /// invariant: 
+pub struct Gape<'a> {
+    /// invariant:
     /// 1. no unreachable block
     /// 2. no switch(constant)
-    /// 3. no ConditionalJump(constant) 
+    /// 3. no ConditionalJump(constant)
     pub blocks: BTreeMap<BlockId, ir::Block>,
     pub bid_init: BlockId,
+
+    /// copy from environmen
+    pub function_abi_mp: &'a HashMap<String, FunctionAbi>,
+    pub source: &'a ir::TranslationUnit,
 
     pub pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
     /// abi of current function
@@ -118,7 +122,7 @@ pub struct Gape {
     num_vregs: usize,
 }
 
-impl Gape {
+impl<'a> Gape<'a> {
     fn init_inst_mp(
         blocks: &BTreeMap<BlockId, ir::Block>,
     ) -> BiMap<(BlockId, Yank), regalloc2::Inst> {
@@ -251,14 +255,27 @@ impl Gape {
             .collect()
     }
 
-    pub fn from_definition(definition: &FunctionDefinition, abi: FunctionAbi) -> Self {
-        Self::new(definition.blocks.clone(), definition.bid_init, abi)
+    pub fn from_definition(
+        definition: &FunctionDefinition,
+        abi: FunctionAbi,
+        function_abi_mp: &'a HashMap<String, FunctionAbi>,
+        source: &'a ir::TranslationUnit,
+    ) -> Self {
+        Self::new(
+            definition.blocks.clone(),
+            definition.bid_init,
+            abi,
+            function_abi_mp,
+            source,
+        )
     }
 
     pub fn new(
         mut blocks: BTreeMap<BlockId, ir::Block>,
         bid_init: BlockId,
         abi: FunctionAbi,
+        function_abi_mp: &'a HashMap<String, FunctionAbi>,
+        source: &'a ir::TranslationUnit,
     ) -> Self {
         for b in blocks.values_mut() {
             let _ = b.exit.optimize();
@@ -289,11 +306,13 @@ impl Gape {
             reg_mp,
             abi,
             num_vregs: a,
+            function_abi_mp,
+            source,
         }
     }
 }
 
-impl regalloc2::Function for Gape {
+impl<'a> regalloc2::Function for Gape<'a> {
     fn num_insts(&self) -> usize {
         self.blocks
             .values()
@@ -743,7 +762,7 @@ impl JumpArg {
     }
 }
 
-impl Gape {
+impl<'a> Gape<'a> {
     fn get_dtype(&self, register_id: RegisterId) -> Dtype {
         match register_id {
             RegisterId::Local { .. } => unreachable!(),

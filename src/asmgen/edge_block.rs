@@ -5,7 +5,7 @@ use crate::{
 
 use super::helper::Gape;
 
-impl Gape {
+impl<'a> Gape<'a> {
     /// avoid regalloc2::RegAllocError::DisallowedBranchArg
     pub fn add_edge_block(mut self) -> Self {
         let max_bid =
@@ -65,7 +65,13 @@ impl Gape {
                         unreachable!()
                     };
                 }
-                self = Self::new(self.blocks, self.bid_init, self.abi);
+                self = Self::new(
+                    self.blocks,
+                    self.bid_init,
+                    self.abi,
+                    self.function_abi_mp,
+                    self.source,
+                );
             } else {
                 break;
             }
