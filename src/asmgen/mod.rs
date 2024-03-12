@@ -4981,6 +4981,43 @@ fn load_float_to_reg(
     }
 }
 
+fn load_constant_to_reg(
+    c: ir::Constant,
+    rd: Register,
+    res: &mut Vec<asm::Instruction>,
+    float_mp: &mut FloatMp,
+) {
+    match c {
+        ir::Constant::Int { .. } => {
+            res.extend(load_int_to_reg(c, rd));
+        }
+        ir::Constant::Float { .. } => {
+            res.extend(load_float_to_reg(c, rd, float_mp));
+        }
+        ir::Constant::GlobalVariable {
+            name,
+            dtype: ir::Dtype::Function { .. },
+        } => {
+            res.push(asm::Instruction::Pseudo(Pseudo::La {
+                rd,
+                symbol: Label(name),
+            }));
+        }
+        ir::Constant::Undef {
+            dtype:
+                dtype @ (ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. }),
+        } => {
+            res.push(asm::Instruction::IType {
+                instr: IType::load(dtype),
+                rd,
+                rs1: Register::Zero,
+                imm: asm::Immediate::Value(0),
+            });
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// may use T0
 /// is operand is constant: store in or_register
 fn load_operand_to_reg(
@@ -4991,34 +5028,8 @@ fn load_operand_to_reg(
     float_mp: &mut FloatMp,
 ) -> Register {
     match operand {
-        ir::Operand::Constant(c @ ir::Constant::Int { .. }) => {
-            res.extend(load_int_to_reg(c, or_register));
-            or_register
-        }
-        ir::Operand::Constant(c @ ir::Constant::Float { .. }) => {
-            res.extend(load_float_to_reg(c, or_register, float_mp));
-            or_register
-        }
-        ir::Operand::Constant(ir::Constant::GlobalVariable {
-            name,
-            dtype: ir::Dtype::Function { .. },
-        }) => {
-            res.push(asm::Instruction::Pseudo(Pseudo::La {
-                rd: or_register,
-                symbol: Label(name),
-            }));
-            or_register
-        }
-        ir::Operand::Constant(ir::Constant::Undef {
-            dtype:
-                dtype @ (ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. }),
-        }) => {
-            res.push(asm::Instruction::IType {
-                instr: IType::load(dtype),
-                rd: or_register,
-                rs1: Register::Zero,
-                imm: asm::Immediate::Value(0),
-            });
+        ir::Operand::Constant(c) => {
+            load_constant_to_reg(c, or_register, res, float_mp);
             or_register
         }
         ir::Operand::Register { rid, dtype } => match register_mp.get(&rid).unwrap() {
@@ -5036,7 +5047,6 @@ fn load_operand_to_reg(
             | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => unreachable!(),
             DirectOrInDirect::InDirect(_) => unreachable!(),
         },
-        _ => unreachable!("{:?}", operand),
     }
 }
 
