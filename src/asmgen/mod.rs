@@ -626,13 +626,13 @@ fn translate_function(
 
     let mut temp_block: Vec<asm::Block> = vec![];
 
-    for (&bid, block) in definition.blocks.iter() {
+    for (&bid, block) in gape.blocks.iter() {
         let instructions = translate_block(
             func_name,
             bid,
             block,
             &mut temp_block,
-            &register_mp,
+            &mut register_mp,
             source,
             function_abi_mp,
             float_mp,
