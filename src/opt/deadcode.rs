@@ -11,7 +11,7 @@ pub struct DeadcodeInner {}
 impl Optimize<FunctionDefinition> for DeadcodeInner {
     fn optimize(&mut self, code: &mut FunctionDefinition) -> bool {
         let b3 = clear_nop(code);
-        let b2 = clear_instruction(code);
+        let b2 = code.clear_instruction();
         let b4 = clear_phinode(code);
         let b1 = clear_allocation(code);
         b1 || b2 || b3 || b4
@@ -109,46 +109,48 @@ fn clear_allocation(code: &mut FunctionDefinition) -> bool {
     modified
 }
 
-fn clear_instruction(code: &mut FunctionDefinition) -> bool {
-    let mut used_opearand: HashSet<(BlockId, usize)> = HashSet::new();
+impl FunctionDefinition {
+    pub fn clear_instruction(&mut self) -> bool {
+        let mut used_opearand: HashSet<(BlockId, usize)> = HashSet::new();
 
-    for (bid, block) in code.blocks.iter_mut() {
-        for (i, instr) in block.instructions.iter_mut().enumerate() {
-            if let ir::Instruction::Store { .. } | ir::Instruction::Call { .. } = &**instr {
-                let _ = used_opearand.insert((*bid, i));
+        for (bid, block) in self.blocks.iter() {
+            for (i, instr) in block.instructions.iter().enumerate() {
+                if let ir::Instruction::Store { .. } | ir::Instruction::Call { .. } = &**instr {
+                    let _ = used_opearand.insert((*bid, i));
+                }
             }
         }
-    }
 
-    for operand in code.walk_operand_mut() {
-        if let ir::Operand::Register {
-            rid: ir::RegisterId::Temp { bid, iid },
-            ..
-        } = operand
-        {
-            let _ = used_opearand.insert((*bid, *iid));
+        for operand in self.walk_operand() {
+            if let ir::Operand::Register {
+                rid: ir::RegisterId::Temp { bid, iid },
+                ..
+            } = operand
+            {
+                let _ = used_opearand.insert((*bid, *iid));
+            }
         }
+
+        let all_temp_rid = self
+            .blocks
+            .iter()
+            .flat_map(|(bid, block)| (0..block.instructions.len()).map(|i| (*bid, i)));
+
+        let mut unused_instr: HashMap<BlockId, Vec<usize>> = HashMap::new();
+
+        all_temp_rid
+            .filter(|x| !used_opearand.contains(x))
+            .for_each(|(bid, iid)| match unused_instr.entry(bid) {
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    o.get_mut().push(iid);
+                }
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    let _ = v.insert(vec![iid]);
+                }
+            });
+
+        shift_operand_and_rm_instr(self, unused_instr)
     }
-
-    let all_temp_rid = code
-        .blocks
-        .iter()
-        .flat_map(|(bid, block)| (0..block.instructions.len()).map(|i| (*bid, i)));
-
-    let mut unused_instr: HashMap<BlockId, Vec<usize>> = HashMap::new();
-
-    all_temp_rid
-        .filter(|x| !used_opearand.contains(x))
-        .for_each(|(bid, iid)| match unused_instr.entry(bid) {
-            std::collections::hash_map::Entry::Occupied(mut o) => {
-                o.get_mut().push(iid);
-            }
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let _ = v.insert(vec![iid]);
-            }
-        });
-
-    shift_operand_and_rm_instr(code, unused_instr)
 }
 
 fn shift_operand_and_rm_instr(
@@ -295,10 +297,10 @@ fn clear_phinode(code: &mut FunctionDefinition) -> bool {
 
 impl FunctionDefinition {
     pub fn walk_operand_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut Operand> + 'a> {
-        Box::new(
-            self.blocks
-                .iter_mut()
-                .flat_map(|(_, b)| b.walk_operand_mut()),
-        )
+        Box::new(self.blocks.values_mut().flat_map(|b| b.walk_operand_mut()))
+    }
+
+    pub fn walk_operand(&self) -> Box<dyn Iterator<Item = &Operand> + '_> {
+        Box::new(self.blocks.values().flat_map(|b| b.walk_operand()))
     }
 }
