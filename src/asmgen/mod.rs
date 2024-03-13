@@ -843,21 +843,53 @@ fn translate_block(
                 ir::Dtype::Typedef { .. } => unreachable!(),
             }
         }
-        match instr.dtype() {
-            ir::Dtype::Unit { .. } => {}
-            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
-                let reg = match allocations.next() {
-                    Some(reg) => reg,
-                    None => continue 'instr_loop,
-                };
-                let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
+
+        match &**instr {
+            ir::Instruction::Nop | ir::Instruction::Store { .. } => {}
+            ir::Instruction::Call { .. } => match allocations.next() {
+                Some(reg) => {
+                    let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
+                }
+                None => {
+                    match instr.dtype() {
+                        ir::Dtype::Unit { .. } => {}
+                        ir::Dtype::Int { .. }
+                        | ir::Dtype::Pointer { .. }
+                        | ir::Dtype::Float { .. } => {
+                            let _ = register_mp.remove(&rid);
+                        }
+                        ir::Dtype::Struct { .. } => {
+                            // doesn't matter
+                        }
+                        ir::Dtype::Array { .. }
+                        | ir::Dtype::Function { .. }
+                        | ir::Dtype::Typedef { .. } => unreachable!(),
+                    }
+                }
+            },
+            ir::Instruction::BinOp { .. }
+            | ir::Instruction::UnaryOp { .. }
+            | ir::Instruction::Load { .. }
+            | ir::Instruction::TypeCast { .. }
+            | ir::Instruction::GetElementPtr { .. } => {
+                match instr.dtype() {
+                    ir::Dtype::Unit { .. } => {}
+                    ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
+                        let reg = match allocations.next() {
+                            Some(reg) => reg,
+                            None => continue 'instr_loop,
+                        };
+                        let _ =
+                            register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
+                    }
+                    ir::Dtype::Struct { .. } => {
+                        // temp struct are always on stack
+                    }
+                    ir::Dtype::Array { .. }
+                    | ir::Dtype::Function { .. }
+                    | ir::Dtype::Typedef { .. } => unreachable!(),
+                }
             }
-            ir::Dtype::Array { .. } => unreachable!(),
-            ir::Dtype::Struct { .. } => {
-                // temp struct are always on stack
-            }
-            ir::Dtype::Function { .. } => unreachable!(),
-            ir::Dtype::Typedef { .. } => unreachable!(),
         }
 
         let edits = output
