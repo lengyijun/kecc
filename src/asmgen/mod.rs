@@ -737,31 +737,32 @@ fn translate_block(
     let mut res = vec![];
 
     let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BeforeFirst)).unwrap();
-    let edits = output
-        .edits
-        .iter()
-        .filter_map(|(prog_point, edit)| {
-            if *prog_point == regalloc2::ProgPoint::before(insn) {
-                Some(edit)
-            } else {
-                None
-            }
-        })
-        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-    res.extend(edits);
-
-    let edits = output
-        .edits
-        .iter()
-        .filter_map(|(prog_point, edit)| {
-            if *prog_point == regalloc2::ProgPoint::after(insn) {
-                Some(edit)
-            } else {
-                None
-            }
-        })
-        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-    res.extend(edits);
+    res.extend(
+        output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::before(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+    );
+    res.extend(
+        output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::after(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+    );
 
     'instr_loop: for (iid, instr) in block.instructions.iter().enumerate() {
         let rid = RegisterId::Temp { bid, iid };
@@ -892,18 +893,19 @@ fn translate_block(
             }
         }
 
-        let edits = output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::before(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-        res.extend(edits);
+        res.extend(
+            output
+                .edits
+                .iter()
+                .filter_map(|(prog_point, edit)| {
+                    if *prog_point == regalloc2::ProgPoint::before(insn) {
+                        Some(edit)
+                    } else {
+                        None
+                    }
+                })
+                .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+        );
 
         match &**instr {
             ir::Instruction::UnaryOp {
