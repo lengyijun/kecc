@@ -806,8 +806,8 @@ fn translate_block(
                             match &gape.abi.params_alloc[aid] {
                                 ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                                     RegOrStack::Reg(_),
-                                ))
-                                | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                )) => unreachable!(),
+                                ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
                                     RegOrStack::Reg(_),
                                 )) => {
                                     let _ = register_mp.insert(
