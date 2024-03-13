@@ -204,6 +204,8 @@ fn translate_function(
                 };
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
+                /*
+                // regalloc2 deal with this
                 // must be a struct
                 let None = register_mp.insert(
                     register_id,
@@ -211,6 +213,7 @@ fn translate_function(
                 ) else {
                     unreachable!()
                 };
+                 */
             }
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
