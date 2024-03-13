@@ -474,17 +474,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                     DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }),
                                 )
                                 | crate::asmgen::ParamAlloc::PrimitiveType(
-                                    DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
-                                        ..
-                                    }),
-                                )
-                                | crate::asmgen::ParamAlloc::PrimitiveType(
                                     DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure {
-                                        ..
-                                    }),
-                                )
-                                | crate::asmgen::ParamAlloc::PrimitiveType(
-                                    DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure {
                                         ..
                                     }),
                                 ) => unreachable!(),

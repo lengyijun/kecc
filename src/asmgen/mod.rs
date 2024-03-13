@@ -60,59 +60,6 @@ static FLOAT_OFFSETS: [(Register, i64); 12] = [
     (Register::FS11, 200),
 ];
 
-static INT_REGISTERS: [Register; 21] = [
-    Register::S1,
-    Register::S2,
-    Register::S3,
-    Register::S4,
-    Register::S5,
-    Register::S6,
-    Register::S7,
-    Register::S8,
-    Register::S9,
-    Register::S10,
-    Register::S11,
-    Register::T5,
-    Register::T6,
-    Register::A0,
-    Register::A1,
-    Register::A2,
-    Register::A3,
-    Register::A4,
-    Register::A5,
-    Register::A6,
-    Register::A7,
-];
-
-static FLOAT_REGISTERS: [Register; 26] = [
-    Register::FS0,
-    Register::FS1,
-    Register::FS2,
-    Register::FS3,
-    Register::FS4,
-    Register::FS5,
-    Register::FS6,
-    Register::FS7,
-    Register::FS8,
-    Register::FS9,
-    Register::FS10,
-    Register::FS11,
-    Register::FT2,
-    Register::FT3,
-    Register::FT4,
-    Register::FT5,
-    Register::FT6,
-    Register::FT7,
-    Register::FA0,
-    Register::FA1,
-    Register::FA2,
-    Register::FA3,
-    Register::FA4,
-    Register::FA5,
-    Register::FA6,
-    Register::FA7,
-];
-
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Asmgen {}
 
@@ -358,15 +305,9 @@ fn translate_function(
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure {
                 ..
             }))
-            | ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure {
-                ..
-            }))
             | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure {
                 ..
-            }))
-            | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
-                RegOrStack::FloatRegNotSure { .. },
-            )) => {
+            })) => {
                 unreachable!()
             }
         }
@@ -781,711 +722,6 @@ fn translate_function(
     function
 }
 
-fn alloc_register(
-    definition: &FunctionDefinition,
-    abi: &FunctionAbi,
-    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    stack_offset_2_s0: &mut i64,
-) {
-    let reserved_rids = definition.get_rid_in_loop();
-
-    let mut int_ig = int_interference_graph(definition, abi, register_mp);
-    spills(
-        &mut int_ig,
-        &INT_REGISTERS,
-        stack_offset_2_s0,
-        &reserved_rids,
-        register_mp,
-    );
-    color(&mut int_ig, &INT_REGISTERS, register_mp);
-    int_ig.dump_register_mp(register_mp);
-
-    let mut float_ig = float_interference_graph(definition, abi, register_mp);
-    spills(
-        &mut float_ig,
-        &FLOAT_REGISTERS,
-        stack_offset_2_s0,
-        &reserved_rids,
-        register_mp,
-    );
-    color(&mut float_ig, &FLOAT_REGISTERS, register_mp);
-    float_ig.dump_register_mp(register_mp);
-}
-
-fn color(
-    ig: &mut GraphWrapper,
-    colors: &[Register],
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) {
-    let mut used_color: HashSet<Register> = HashSet::new();
-    for node_index in lbfs(&ig.graph).into_iter() {
-        if let Some(Some(color)) = ig.graph.node_weight(node_index) {
-            // already colored
-            let _ = used_color.insert(*color);
-            continue;
-        }
-        let conflict_colors: HashSet<Register> = ig
-            .graph
-            .neighbors(node_index)
-            .map(|n| ig.graph.node_weight(n).unwrap())
-            .flat_map(|x| *x)
-            .collect();
-
-        let Some(x) = ig.graph.node_weight_mut(node_index) else {
-            unreachable!()
-        };
-        assert_eq!(*x, None);
-
-        let mut available_color_iter = used_color
-            .iter()
-            .chain(colors.iter())
-            .filter(|c| !conflict_colors.contains(c))
-            .copied();
-
-        let color = match register_mp
-            .get(
-                ig.register_id_2_node_index
-                    .get_by_right(&node_index)
-                    .unwrap(),
-            )
-            .unwrap()
-        {
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { src: Some(src) })
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { src: Some(src) })
-            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { src: Some(src) })
-            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { src: Some(src) }) => {
-                // don't use hashset !
-                if available_color_iter.clone().any(|x| x == *src) {
-                    *src
-                } else {
-                    available_color_iter.next().unwrap()
-                }
-            }
-            _ => available_color_iter.next().unwrap(),
-        };
-        *x = Some(color);
-        let _ = used_color.insert(color);
-    }
-}
-
-#[derive(Debug, Default)]
-struct GraphWrapper {
-    graph: StableGraph<Option<Register>, (), petgraph::Undirected>,
-    register_id_2_node_index: BiMap<RegisterId, NodeIndex>,
-}
-
-impl GraphWrapper {
-    fn add_node(&mut self, register_id: RegisterId) {
-        let node = self.graph.add_node(None);
-        let Ok(()) = self
-            .register_id_2_node_index
-            .insert_no_overwrite(register_id, node)
-        else {
-            unreachable!()
-        };
-    }
-
-    fn add_edge(&mut self, a: RegisterId, b: RegisterId) {
-        if a == b {
-            return;
-        }
-        let Some(&a) = self.register_id_2_node_index.get_by_left(&a) else {
-            return;
-        };
-        let Some(&b) = self.register_id_2_node_index.get_by_left(&b) else {
-            return;
-        };
-        let _ = self.graph.update_edge(a, b, ());
-    }
-
-    fn dump_register_mp(
-        &self,
-        register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    ) {
-        for node_index in self.graph.node_identifiers() {
-            let Some(register_id) = self.register_id_2_node_index.get_by_right(&node_index) else {
-                // precolored
-                continue;
-            };
-            let Some(Some(color)) = self.graph.node_weight(node_index) else {
-                unreachable!()
-            };
-            match register_mp.get(register_id).unwrap() {
-                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                    let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })) =
-                        register_mp.insert(
-                            *register_id,
-                            DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                        )
-                    else {
-                        unreachable!()
-                    };
-                }
-                DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
-                    let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })) =
-                        register_mp.insert(
-                            *register_id,
-                            DirectOrInDirect::Direct(RegOrStack::Reg(*color)),
-                        )
-                    else {
-                        unreachable!()
-                    };
-                }
-                DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
-                    let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })) =
-                        register_mp.insert(
-                            *register_id,
-                            DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                        )
-                    else {
-                        unreachable!()
-                    };
-                }
-                DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => {
-                    let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. })) =
-                        register_mp.insert(
-                            *register_id,
-                            DirectOrInDirect::InDirect(RegOrStack::Reg(*color)),
-                        )
-                    else {
-                        unreachable!()
-                    };
-                }
-                _ => unreachable!(),
-            }
-        }
-    }
-}
-
-fn int_inter_block_liveness_graph(
-    definition: &FunctionDefinition,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) -> LivenessRes {
-    // def can be aggressive
-    let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
-    for (&bid, block) in &definition.blocks {
-        let mut v = Vec::new();
-        for aid in 0..block.phinodes.len() {
-            v.push(RegisterId::Arg { bid, aid });
-        }
-        for iid in 0..block.instructions.len() {
-            v.push(RegisterId::Temp { bid, iid });
-        }
-        let None = def.insert(bid, v) else {
-            unreachable!()
-        };
-    }
-
-    let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
-    for (&curr_bid, block) in &definition.blocks {
-        let v: Vec<RegisterId> = block
-            .walk_register()
-            .filter_map(|(rid, _)| {
-                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid
-                    && bid == curr_bid
-                {
-                    None
-                } else {
-                    match register_mp.get(&rid) {
-                        Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }))
-                        | Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })) => {
-                            Some(rid)
-                        }
-                        _ => None,
-                    }
-                }
-            })
-            .collect();
-        let None = usee.insert(curr_bid, v) else {
-            unreachable!()
-        };
-    }
-    gen_kill(&def, &usee, definition)
-}
-
-fn float_inter_block_liveness_graph(
-    definition: &FunctionDefinition,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) -> LivenessRes {
-    // def can be aggressive
-    let mut def: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
-    for (&bid, block) in &definition.blocks {
-        let mut v = Vec::new();
-        for aid in 0..block.phinodes.len() {
-            v.push(RegisterId::Arg { bid, aid });
-        }
-        for iid in 0..block.instructions.len() {
-            v.push(RegisterId::Temp { bid, iid });
-        }
-        let None = def.insert(bid, v) else {
-            unreachable!()
-        };
-    }
-
-    let mut usee: HashMap<BlockId, Vec<RegisterId>> = HashMap::new();
-    for (&curr_bid, block) in &definition.blocks {
-        let v: Vec<RegisterId> = block
-            .walk_register()
-            .filter_map(|(rid, _)| {
-                if let RegisterId::Arg { bid, .. } | RegisterId::Temp { bid, .. } = rid
-                    && bid == curr_bid
-                {
-                    None
-                } else {
-                    match register_mp.get(&rid) {
-                        Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }))
-                        | Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure {
-                            ..
-                        })) => Some(rid),
-                        _ => None,
-                    }
-                }
-            })
-            .collect();
-        let None = usee.insert(curr_bid, v) else {
-            unreachable!()
-        };
-    }
-    gen_kill(&def, &usee, definition)
-}
-
-fn int_interference_graph(
-    definition: &FunctionDefinition,
-    abi: &FunctionAbi,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) -> GraphWrapper {
-    let mut int_ig: GraphWrapper = GraphWrapper::default();
-    for (rid, v) in register_mp {
-        match v {
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
-                int_ig.add_node(*rid);
-            }
-            _ => {}
-        }
-    }
-    let caller_saved_register = [
-        int_ig.graph.add_node(Some(Register::A0)),
-        int_ig.graph.add_node(Some(Register::A1)),
-        int_ig.graph.add_node(Some(Register::A2)),
-        int_ig.graph.add_node(Some(Register::A3)),
-        int_ig.graph.add_node(Some(Register::A4)),
-        int_ig.graph.add_node(Some(Register::A5)),
-        int_ig.graph.add_node(Some(Register::A6)),
-        int_ig.graph.add_node(Some(Register::A7)),
-        int_ig.graph.add_node(Some(Register::T5)),
-        int_ig.graph.add_node(Some(Register::T6)),
-    ];
-
-    for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
-        if a != b {
-            let _ = int_ig.graph.add_edge(a, b, ());
-        }
-    }
-
-    for aid_1 in 0..definition.allocations.len() {
-        for aid_2 in 0..definition.allocations.len() {
-            int_ig.add_edge(
-                RegisterId::Local { aid: aid_1 },
-                RegisterId::Local { aid: aid_2 },
-            );
-        }
-    }
-
-    for aid in 0..definition.allocations.len() {
-        for (x, _) in definition.get_init_block().phinodes.iter().enumerate() {
-            int_ig.add_edge(
-                RegisterId::Local { aid },
-                RegisterId::Arg {
-                    bid: definition.bid_init,
-                    aid: x,
-                },
-            );
-        }
-    }
-
-    let liveness_sets = int_inter_block_liveness_graph(definition, register_mp).out;
-
-    for (bid, mut live_set) in liveness_sets {
-        let block = definition.blocks.get(&bid).unwrap();
-
-        // first analyze block.exit
-        for (rid, _) in block.exit.walk_register() {
-            let _ = live_set.insert(rid);
-        }
-        for (rid, _) in block.exit.walk_register() {
-            for a in &live_set {
-                int_ig.add_edge(*a, rid);
-            }
-        }
-
-        // then visit instruction in reverse order
-        for (iid, instr) in block.instructions.iter().enumerate().rev() {
-            let _ = live_set.remove(&RegisterId::Temp { bid, iid });
-
-            for &a in &live_set {
-                int_ig.add_edge(a, RegisterId::Temp { bid, iid });
-            }
-
-            if let ir::Instruction::Call { callee, .. } = &**instr {
-                // live set conflict with caller_saved_register
-                // callee conflict with caller_saved_register
-                for a in live_set
-                    .iter()
-                    .chain(once(callee).filter_map(|operand| match operand {
-                        ir::Operand::Constant(_) => None,
-                        ir::Operand::Register { rid, .. } => Some(rid),
-                    }))
-                {
-                    let Some(&a) = int_ig.register_id_2_node_index.get_by_left(a) else {
-                        continue;
-                    };
-                    for &b in &caller_saved_register {
-                        let _ = int_ig.graph.add_edge(a, b, ());
-                    }
-                }
-            }
-
-            for (rid, _) in instr.walk_register() {
-                let _ = live_set.insert(rid);
-            }
-
-            for (rid_1, _) in instr.walk_register() {
-                for &a in &live_set {
-                    int_ig.add_edge(a, rid_1);
-                }
-            }
-        }
-
-        for (aid, _) in block.phinodes.iter().enumerate() {
-            let _ = live_set.insert(RegisterId::Arg { bid, aid });
-        }
-
-        for (aid, _) in block.phinodes.iter().enumerate() {
-            let arg = RegisterId::Arg { bid, aid };
-            for &rid in &live_set {
-                int_ig.add_edge(rid, arg);
-            }
-        }
-    }
-
-    for (aid, param) in abi.params_alloc.iter().enumerate() {
-        let reg = match param {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => reg,
-            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
-            _ => continue,
-        };
-        let Some(node_index) = int_ig
-            .register_id_2_node_index
-            .get_by_left(&RegisterId::Arg {
-                bid: definition.bid_init,
-                aid,
-            })
-        else {
-            continue;
-        };
-
-        if int_ig
-            .graph
-            .neighbors(*node_index)
-            .all(|neighbour| neighbour != caller_saved_register[aid])
-        {
-            let x = int_ig.graph.node_weight_mut(*node_index).unwrap();
-            assert_eq!(*x, None);
-            *x = Some(*reg);
-        }
-    }
-
-    int_ig
-}
-
-fn float_interference_graph(
-    definition: &FunctionDefinition,
-    abi: &FunctionAbi,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) -> GraphWrapper {
-    let mut float_ig: GraphWrapper = GraphWrapper::default();
-    for (rid, v) in register_mp {
-        match v {
-            DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })
-            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => {
-                float_ig.add_node(*rid);
-            }
-            _ => {}
-        }
-    }
-    let caller_saved_register = [
-        float_ig.graph.add_node(Some(Register::FA0)),
-        float_ig.graph.add_node(Some(Register::FA1)),
-        float_ig.graph.add_node(Some(Register::FA2)),
-        float_ig.graph.add_node(Some(Register::FA3)),
-        float_ig.graph.add_node(Some(Register::FA4)),
-        float_ig.graph.add_node(Some(Register::FA5)),
-        float_ig.graph.add_node(Some(Register::FA6)),
-        float_ig.graph.add_node(Some(Register::FA7)),
-        float_ig.graph.add_node(Some(Register::FT2)),
-        float_ig.graph.add_node(Some(Register::FT3)),
-        float_ig.graph.add_node(Some(Register::FT4)),
-        float_ig.graph.add_node(Some(Register::FT5)),
-        float_ig.graph.add_node(Some(Register::FT6)),
-        float_ig.graph.add_node(Some(Register::FT7)),
-    ];
-
-    for (a, b) in iproduct!(caller_saved_register, caller_saved_register) {
-        if a != b {
-            let _ = float_ig.graph.add_edge(a, b, ());
-        }
-    }
-
-    let liveness_sets = float_inter_block_liveness_graph(definition, register_mp).out;
-
-    for (bid, mut live_set) in liveness_sets {
-        let block = definition.blocks.get(&bid).unwrap();
-
-        // first analyze block.exit
-        for (rid, _) in block.exit.walk_register() {
-            let _ = live_set.insert(rid);
-        }
-        for (rid, _) in block.exit.walk_register() {
-            for a in &live_set {
-                float_ig.add_edge(*a, rid);
-            }
-        }
-
-        // then visit instruction in reverse order
-        for (iid, instr) in block.instructions.iter().enumerate().rev() {
-            let _ = live_set.remove(&RegisterId::Temp { bid, iid });
-
-            for &a in &live_set {
-                float_ig.add_edge(a, RegisterId::Temp { bid, iid });
-            }
-
-            if let ir::Instruction::Call { callee, .. } = &**instr {
-                // live set conflict with caller_saved_register
-                // callee conflict with caller_saved_register
-                for a in live_set
-                    .iter()
-                    .chain(once(callee).filter_map(|operand| match operand {
-                        ir::Operand::Constant(_) => None,
-                        ir::Operand::Register { rid, .. } => Some(rid),
-                    }))
-                {
-                    let Some(&a) = float_ig.register_id_2_node_index.get_by_left(a) else {
-                        continue;
-                    };
-                    for &b in &caller_saved_register {
-                        let _ = float_ig.graph.add_edge(a, b, ());
-                    }
-                }
-            }
-
-            for (rid, _) in instr.walk_register() {
-                let _ = live_set.insert(rid);
-            }
-
-            for (rid_1, _) in instr.walk_register() {
-                for &a in &live_set {
-                    float_ig.add_edge(a, rid_1);
-                }
-            }
-
-            // TODO: check Call T5 T6 ...
-        }
-
-        for (aid, _) in block.phinodes.iter().enumerate() {
-            let _ = live_set.insert(RegisterId::Arg { bid, aid });
-        }
-
-        for (aid, _) in block.phinodes.iter().enumerate() {
-            let arg = RegisterId::Arg { bid, aid };
-            for &rid in &live_set {
-                float_ig.add_edge(rid, arg);
-            }
-        }
-    }
-
-    for (aid, param) in abi.params_alloc.iter().enumerate() {
-        let reg = match param {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => reg,
-            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => reg,
-            _ => continue,
-        };
-        let Some(node_index) = float_ig
-            .register_id_2_node_index
-            .get_by_left(&RegisterId::Arg {
-                bid: definition.bid_init,
-                aid,
-            })
-        else {
-            continue;
-        };
-
-        if float_ig
-            .graph
-            .neighbors(*node_index)
-            .all(|neighbour| neighbour != caller_saved_register[aid])
-        {
-            let x = float_ig.graph.node_weight_mut(*node_index).unwrap();
-            assert_eq!(*x, None);
-            *x = Some(*reg);
-        }
-    }
-
-    float_ig
-}
-
-fn spills(
-    ig: &mut GraphWrapper,
-    colors: &[Register],
-    stack_offset_2_s0: &mut i64,
-    reserved_rids: &HashSet<RegisterId>,
-    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) {
-    let Some(clique_iterator) = petgraph::algo::peo::CliqueIterator::new(&ig.graph) else {
-        dbg!(&ig.register_id_2_node_index);
-        println!(
-            "{:?}",
-            petgraph::dot::Dot::with_config(
-                &ig.graph,
-                &[
-                    petgraph::dot::Config::EdgeNoLabel,
-                    petgraph::dot::Config::NodeIndexLabel
-                ]
-            )
-        );
-        panic!("not a chordal graph")
-    };
-    let max_cliques: Vec<_> = clique_iterator
-        .filter(|clique| clique.len() >= colors.len())
-        .collect();
-    if max_cliques.is_empty() {
-        return;
-    }
-    if max_cliques
-        .iter()
-        .all(|clique| clique.len() <= colors.len())
-    {
-        return;
-    }
-    for clique in max_cliques {
-        let (uncolored, colored): (Vec<_>, Vec<_>) = clique
-            .into_iter()
-            .partition(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)));
-
-        let (reserved_node_index, to_be_spilled): (Vec<NodeIndex>, Vec<NodeIndex>) = uncolored
-            .into_iter()
-            .filter(|&node_index| matches!(ig.graph.node_weight(node_index), Some(None)))
-            .partition(|node_index| {
-                reserved_rids.contains(
-                    ig.register_id_2_node_index
-                        .get_by_right(node_index)
-                        .unwrap(),
-                )
-            });
-        if let Some(count) = usize::checked_sub(
-            reserved_node_index.len() + to_be_spilled.len() + colored.len(),
-            colors.len(),
-        ) {
-            for node in to_be_spilled
-                .iter()
-                .chain(reserved_node_index.iter())
-                .take(count)
-            {
-                match ig.graph.remove_node(*node) {
-                    Some(Some(_color)) => {
-                        // never remove precolored node
-                        unreachable!()
-                    }
-                    Some(None) => {
-                        spill(
-                            *ig.register_id_2_node_index.get_by_right(node).unwrap(),
-                            stack_offset_2_s0,
-                            register_mp,
-                        );
-                    }
-                    None => {
-                        // already removed
-                        unreachable!()
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// no dtype here
-/// always allocate 8 bytes
-fn spill(
-    register_id: RegisterId,
-    stack_offset_2_s0: &mut i64,
-    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-) {
-    let mut allocate_on_stack = || {
-        let align: i64 = 8;
-        let size: i64 = 8;
-        while *stack_offset_2_s0 % align != 0 {
-            *stack_offset_2_s0 -= 1;
-        }
-        *stack_offset_2_s0 -= size;
-    };
-
-    match register_mp.get(&register_id).unwrap() {
-        DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-            allocate_on_stack();
-            let Some(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })) = register_mp
-                .insert(
-                    register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Stack {
-                        offset_to_s0: *stack_offset_2_s0,
-                    }),
-                )
-            else {
-                unreachable!()
-            };
-        }
-        DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
-            allocate_on_stack();
-            let Some(DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })) = register_mp
-                .insert(
-                    register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Stack {
-                        offset_to_s0: *stack_offset_2_s0,
-                    }),
-                )
-            else {
-                unreachable!()
-            };
-        }
-        DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
-            allocate_on_stack();
-            let Some(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })) = register_mp
-                .insert(
-                    register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::Stack {
-                        offset_to_s0: *stack_offset_2_s0,
-                    }),
-                )
-            else {
-                unreachable!()
-            };
-        }
-        DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => {
-            allocate_on_stack();
-            let Some(DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. })) = register_mp
-                .insert(
-                    register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::Stack {
-                        offset_to_s0: *stack_offset_2_s0,
-                    }),
-                )
-            else {
-                unreachable!()
-            };
-        }
-        _ => unreachable!(),
-    }
-}
-
 fn translate_block(
     func_name: &str,
     bid: BlockId,
@@ -1675,8 +911,7 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1711,8 +946,7 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1756,8 +990,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1796,8 +1029,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1832,8 +1064,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1912,8 +1143,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -1959,8 +1189,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2000,8 +1229,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2051,8 +1279,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2115,8 +1342,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2156,8 +1382,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2207,8 +1432,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2249,8 +1473,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2300,8 +1523,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2342,8 +1564,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2393,8 +1614,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -2463,8 +1683,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3238,8 +2457,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3297,8 +2515,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3347,8 +2564,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3389,8 +2605,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3431,8 +2646,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3473,8 +2687,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3566,7 +2779,7 @@ fn translate_block(
                         ));
                         Register::T3
                     }
-                    RegOrStack::IntRegNotSure { .. } | RegOrStack::FloatRegNotSure { .. } => {
+                    RegOrStack::IntRegNotSure { .. } => {
                         unreachable!()
                     }
                 };
@@ -3590,8 +2803,7 @@ fn translate_block(
                             0,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(src) => {
@@ -3606,8 +2818,7 @@ fn translate_block(
                                 ));
                                 Register::T2
                             }
-                            RegOrStack::IntRegNotSure { .. }
-                            | RegOrStack::FloatRegNotSure { .. } => {
+                            RegOrStack::IntRegNotSure { .. } => {
                                 unreachable!()
                             }
                         };
@@ -3669,7 +2880,7 @@ fn translate_block(
                         ));
                         Register::T2
                     }
-                    RegOrStack::IntRegNotSure { .. } | RegOrStack::FloatRegNotSure { .. } => {
+                    RegOrStack::IntRegNotSure { .. } => {
                         unreachable!()
                     }
                 };
@@ -3693,8 +2904,7 @@ fn translate_block(
                             source,
                         );
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3737,8 +2947,7 @@ fn translate_block(
                         *offset_to_s0 as u64,
                     ));
                 }
-                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => unreachable!(),
+                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => unreachable!(),
                 DirectOrInDirect::InDirect(_) => unreachable!(),
             },
             ir::Instruction::Load {
@@ -3775,8 +2984,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -3877,8 +3085,7 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Reg(_)) => unreachable!(),
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
@@ -3894,8 +3101,7 @@ fn translate_block(
                                     to_be_cp_parallel.push((*src_reg, target_reg, operand.dtype()));
                                 }
                             }
-                            DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                         },
@@ -3947,9 +3153,7 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. })
-                            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::InDirect(RegOrStack::FloatRegNotSure { .. }) => {
+                            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                         },
@@ -4080,8 +3284,7 @@ fn translate_block(
                                 ));
                                 Register::T0
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -4108,8 +3311,7 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -4132,8 +3334,7 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                                 unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -4766,8 +3967,7 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
+                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
                         unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
@@ -5230,8 +4430,7 @@ fn load_operand_to_reg(
                 ));
                 or_register
             }
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => unreachable!(),
+            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => unreachable!(),
             DirectOrInDirect::InDirect(_) => unreachable!(),
         },
     }
@@ -5738,10 +4937,6 @@ enum RegisterCouple {
 enum RegOrStack {
     /// to be allocated
     IntRegNotSure {
-        /// prefer to be allocate as src
-        src: Option<Register>,
-    },
-    FloatRegNotSure {
         /// prefer to be allocate as src
         src: Option<Register>,
     },
@@ -6339,70 +5534,6 @@ fn post_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> V
 }
  */
 
-#[derive(Debug, Default)]
-struct LivenessRes {
-    inn: HashMap<BlockId, HashSet<RegisterId>>,
-    out: HashMap<BlockId, HashSet<RegisterId>>,
-}
-
-// https://groups.seas.harvard.edu/courses/cs153/2019fa/lectures/Lec20-Dataflow-analysis.pdf
-fn gen_kill(
-    def: &HashMap<BlockId, Vec<RegisterId>>,
-    usee: &HashMap<BlockId, Vec<RegisterId>>,
-    definition: &FunctionDefinition,
-) -> LivenessRes {
-    let mut liveness_res = LivenessRes::default();
-
-    let mut modified = true;
-    while modified {
-        modified = false;
-        for (bid, block) in &definition.blocks {
-            let old_out_len = liveness_res
-                .out
-                .get(bid)
-                .map(|x| x.len())
-                .unwrap_or_default();
-            let old_in_len = liveness_res
-                .inn
-                .get(bid)
-                .map(|x| x.len())
-                .unwrap_or_default();
-
-            let new_out: HashSet<RegisterId> = block.exit.walk_jump_bid().fold(
-                HashSet::new(),
-                |value, jump_bid| match liveness_res.inn.get(&jump_bid) {
-                    Some(x) => value.union(x).copied().collect(),
-                    None => value,
-                },
-            );
-
-            match new_out.len().cmp(&old_out_len) {
-                std::cmp::Ordering::Less => unreachable!(),
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Greater => modified = true,
-            }
-
-            let new_in: HashSet<RegisterId> = new_out
-                .iter()
-                .filter(|&rid| !def.get(bid).unwrap().contains(rid))
-                .chain(usee.get(bid).unwrap())
-                .copied()
-                .collect();
-
-            match new_in.len().cmp(&old_in_len) {
-                std::cmp::Ordering::Less => unreachable!(),
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Greater => modified = true,
-            }
-
-            let _x = liveness_res.inn.insert(*bid, new_in);
-            let _x = liveness_res.out.insert(*bid, new_out);
-        }
-    }
-
-    liveness_res
-}
-
 impl DataSize {
     fn mask(self) -> u64 {
         match self {
@@ -6416,72 +5547,6 @@ impl DataSize {
     }
 }
 
-impl FunctionDefinition {
-    fn get_init_block(&self) -> &ir::Block {
-        self.blocks.get(&self.bid_init).unwrap()
-    }
-
-    fn get_bid_in_loop(&self) -> HashSet<BlockId> {
-        let mut res: HashSet<BlockId> = HashSet::new();
-        let mut graph: petgraph::Graph<(), (), petgraph::Directed> = Default::default();
-        let mut bid_2_node_index: HashMap<BlockId, NodeIndex> = HashMap::new();
-        let mut node_index_2_bid: HashMap<NodeIndex, BlockId> = HashMap::new();
-        for &bid in self.blocks.keys() {
-            let node_index = graph.add_node(());
-            let None = bid_2_node_index.insert(bid, node_index) else {
-                unreachable!()
-            };
-            let None = node_index_2_bid.insert(node_index, bid) else {
-                unreachable!()
-            };
-        }
-
-        for (&curr_bid, block) in &self.blocks {
-            for next_bid in block.exit.walk_jump_bid() {
-                if curr_bid == next_bid {
-                    let true = res.insert(curr_bid) else {
-                        unreachable!()
-                    };
-                } else {
-                    let _ = graph.add_edge(
-                        *bid_2_node_index.get(&curr_bid).unwrap(),
-                        *bid_2_node_index.get(&next_bid).unwrap(),
-                        (),
-                    );
-                }
-            }
-        }
-
-        let loops: Vec<BlockId> = petgraph::algo::tarjan_scc(&graph)
-            .into_iter()
-            .filter(|x| x.len() > 1)
-            .flatten()
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|node_index| *node_index_2_bid.get(&node_index).unwrap())
-            .collect();
-
-        res.extend(loops);
-        res
-    }
-
-    fn get_rid_in_loop(&self) -> HashSet<RegisterId> {
-        let bid_in_loop = self.get_bid_in_loop();
-
-        // check used rid
-        bid_in_loop
-            .into_iter()
-            .flat_map(|bid| {
-                self.blocks
-                    .get(&bid)
-                    .unwrap()
-                    .walk_register()
-                    .map(|(rid, _)| rid)
-            })
-            .collect()
-    }
-}
-
 fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
     match x {
         DirectOrInDirect::Direct(RegOrStack::Reg(reg))
@@ -6490,53 +5555,6 @@ fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
         | DirectOrInDirect::InDirect(RegOrStack::Stack { .. }) => None,
         _ => unreachable!(),
     }
-}
-
-// a modified lbfs: precolored node first
-// output of lbfs = reverse of peo
-pub fn lbfs(graph: &StableGraph<Option<Register>, (), petgraph::Undirected>) -> Vec<NodeIndex> {
-    let mut res: Vec<NodeIndex> = Vec::new();
-
-    let mut l: LinkedList<Vec<NodeIndex>> = LinkedList::from([graph.node_identifiers().collect()]);
-
-    for _ in 0..graph.node_identifiers().count() {
-        let v = l.front_mut().unwrap();
-
-        // precolored node first
-        let pivot = match v
-            .iter()
-            .find(|n| matches!(graph.node_weight(**n), Some(Some(_))))
-        {
-            Some(&x) => {
-                v.retain(|y| *y != x);
-                x
-            }
-            None => v.pop().unwrap(),
-        };
-        res.push(pivot);
-
-        if v.is_empty() {
-            let Some(_) = l.pop_front() else {
-                unreachable!()
-            };
-        }
-
-        let mut cursor = l.cursor_front_mut();
-        let neighbour: HashSet<NodeIndex> = graph.neighbors(pivot).collect();
-
-        while let Some(x) = cursor.current() {
-            let (a, b): (Vec<_>, Vec<_>) = x.iter().partition(|&y| neighbour.contains(y));
-            if a.is_empty() || b.is_empty() {
-            } else {
-                *x = b;
-                cursor.insert_before(a);
-            }
-            cursor.move_next();
-        }
-    }
-    assert!(l.is_empty());
-
-    res
 }
 
 impl TranslationUnit {
