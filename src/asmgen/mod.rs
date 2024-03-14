@@ -3962,18 +3962,19 @@ fn translate_block(
     }
 
     let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockExit)).unwrap();
-    let edits = output
-        .edits
-        .iter()
-        .filter_map(|(prog_point, edit)| {
-            if *prog_point == regalloc2::ProgPoint::before(insn) {
-                Some(edit)
-            } else {
-                None
-            }
-        })
-        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-    res.extend(edits);
+    res.extend(
+        output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::before(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+    );
 
     match &block.exit {
         ir::BlockExit::Jump { arg } => {
@@ -4107,18 +4108,19 @@ fn translate_block(
         ir::BlockExit::Unreachable => unreachable!(),
     }
 
-    let edits = output
-        .edits
-        .iter()
-        .filter_map(|(prog_point, edit)| {
-            if *prog_point == regalloc2::ProgPoint::after(insn) {
-                Some(edit)
-            } else {
-                None
-            }
-        })
-        .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-    res.extend(edits);
+    res.extend(
+        output
+            .edits
+            .iter()
+            .filter_map(|(prog_point, edit)| {
+                if *prog_point == regalloc2::ProgPoint::after(insn) {
+                    Some(edit)
+                } else {
+                    None
+                }
+            })
+            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+    );
 
     res
 }
