@@ -14,6 +14,7 @@ use crate::ir::{
     self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
 };
 use crate::opt::deadcode::DeadcodeInner;
+use crate::opt::domtree::DomTree;
 use crate::{Deadcode, Optimize, Translate};
 use bimap::BiMap;
 use itertools::{iproduct, izip};
@@ -570,11 +571,10 @@ fn translate_function(
 
     let mut temp_block: Vec<asm::Block> = vec![];
 
-    for (&bid, block) in gape.blocks.iter() {
+    for bid in gape.reverse_post_order() {
         let instructions = translate_block(
             func_name,
             bid,
-            block,
             &mut temp_block,
             &mut register_mp,
             source,
@@ -721,7 +721,6 @@ fn translate_function(
 fn translate_block(
     func_name: &str,
     bid: BlockId,
-    block: &ir::Block,
     temp_block: &mut Vec<asm::Block>,
     register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     source: &ir::TranslationUnit,
@@ -730,6 +729,7 @@ fn translate_block(
     gape: &Gape<'_>,
     output: &regalloc2::Output,
 ) -> Vec<asm::Instruction> {
+    let block = &gape.blocks[&bid];
     let mut res = vec![];
 
     let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BeforeFirst)).unwrap();
