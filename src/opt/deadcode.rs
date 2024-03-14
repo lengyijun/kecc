@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::*;
 use crate::*;
 
+use super::domtree::DomTree;
+
 pub type Deadcode = FunctionPass<Repeat<DeadcodeInner>>;
 
 #[derive(Default, Clone, Copy, Debug)]

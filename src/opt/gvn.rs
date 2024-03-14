@@ -4,7 +4,7 @@ use std::hash::Hash;
 use lang_c::ast::{BinaryOperator, UnaryOperator};
 
 use crate::ir::{BlockId, Dtype, Operand, RegisterId};
-use crate::opt::mem2reg;
+use crate::opt::domtree::DomTree;
 use crate::*;
 
 pub type Gvn = FunctionPass<GvnInner>;
@@ -25,8 +25,8 @@ impl Optimize<ir::FunctionDefinition> for GvnInner {
 
         let rpo = code.reverse_post_order();
         let pred = code.calculate_pred();
-        let dom = mem2reg::calculate_dominator(code, &pred);
-        let idom = mem2reg::calculate_idom(code, &dom, rpo.clone());
+        let dom = code.calculate_dominator(&pred);
+        let idom = code.calculate_idom(&dom, &rpo);
 
         for bid in rpo.into_iter() {
             let mut leader_table_vec: Vec<HashMap<Num, Operand>> = match idom.get(&bid) {

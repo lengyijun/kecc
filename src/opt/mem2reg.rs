@@ -1,8 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::DerefMut;
 
 use crate::ir::*;
 use crate::*;
+
+use super::domtree::DomTree;
 
 pub type Mem2reg = FunctionPass<Mem2regInner>;
 
@@ -13,8 +15,8 @@ impl Optimize<FunctionDefinition> for Mem2regInner {
     fn optimize(&mut self, code: &mut FunctionDefinition) -> bool {
         let rpo = code.reverse_post_order();
         let pred = code.calculate_pred();
-        let dom = calculate_dominator(code, &pred);
-        let idom = calculate_idom(code, &dom, rpo.clone());
+        let dom = code.calculate_dominator(&pred);
+        let idom = code.calculate_idom(&dom, &rpo);
         let df = dominance_frontier(&dom, &pred);
 
         // search location can't remove
@@ -387,121 +389,13 @@ fn mark_impromotable(lhs: &Operand, impromotable: &mut HashSet<usize>) {
     }
 }
 
-// https://en.wikipedia.org/wiki/Dominator_(graph_theory)
-// A -> [A, B, C] means B dominate A, C dominate A
-// if a block is unreachable(not block_init, and no pred): not contained in return value
-pub fn calculate_dominator(
-    code: &FunctionDefinition,
-    pred: &HashMap<BlockId, HashSet<BlockId>>,
-) -> HashMap<BlockId, HashSet<BlockId>> {
-    #[allow(non_snake_case)]
-    let N: HashSet<BlockId> = code.blocks.iter().map(|(&bid, _)| bid).collect();
-
-    // TODO: in another order
-    let iter = code.blocks.iter().filter_map(|(bid, _)| {
-        if bid != &code.bid_init {
-            pred.get(bid).map(|pred| (bid, pred))
-        } else {
-            None
-        }
-    });
-
-    let mut res: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-    let None = res.insert(code.bid_init, HashSet::from([code.bid_init])) else {
-        unreachable!()
-    };
-    for (bid, _) in iter.clone() {
-        let None = res.insert(*bid, N.clone()) else {
-            unreachable!()
-        };
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (bid, pred) in iter.clone() {
-            let x: HashSet<BlockId> = pred
-                .iter()
-                .filter_map(|x| res.get(x))
-                .fold(N.clone(), |a, b| a.intersection(b).cloned().collect())
-                .union(&HashSet::from([*bid]))
-                .cloned()
-                .collect();
-
-            if &x != res.get(bid).unwrap() {
-                changed = true;
-                let Some(_) = res.insert(*bid, x) else {
-                    unreachable!()
-                };
-            }
-        }
-    }
-    res
-}
-
-pub fn calculate_idom(
-    code: &FunctionDefinition,
-    dom: &HashMap<BlockId, HashSet<BlockId>>,
-    rpo: Vec<BlockId>,
-) -> HashMap<BlockId, BlockId> {
-    let mut idom: HashMap<BlockId, BlockId> = HashMap::new();
-    'outer: for b in rpo.iter().filter(|&&x| x != code.bid_init) {
-        for a in rpo.iter() {
-            if dom.get(b).unwrap()
-                == &dom
-                    .get(a)
-                    .unwrap()
-                    .union(&HashSet::from([*b]))
-                    .cloned()
-                    .collect::<HashSet<BlockId>>()
-            {
-                let None = idom.insert(*b, *a) else {
-                    unreachable!()
-                };
-                continue 'outer;
-            }
-        }
-        unreachable!()
-    }
-    idom
-}
-
+/*
 impl FunctionDefinition {
-    // https://eli.thegreenplace.net/2015/directed-graph-traversal-orderings-and-applications-to-data-flow-analysis/
-    pub fn reverse_post_order(&self) -> Vec<BlockId> {
-        let mut visited: HashSet<BlockId> = HashSet::new();
-        let mut order: Vec<BlockId> = vec![];
-        dfs_walker(self.bid_init, self, &mut visited, &mut order);
-        order.reverse();
-        assert_eq!(order[0], self.bid_init);
-        order
-    }
-
-    pub fn calculate_pred_inner(
-        blocks: &BTreeMap<BlockId, Block>,
-        bid_init: BlockId,
-    ) -> HashMap<BlockId, HashSet<BlockId>> {
-        let mut hm: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
-        for (&id, b) in blocks {
-            for next_id in b.exit.walk_jump_bid() {
-                let _b = hm.entry(next_id).or_default().insert(id);
-            }
-        }
-        let None = hm.insert(bid_init, HashSet::new()) else {
-            unreachable!()
-        };
-        hm
-    }
-
-    pub fn calculate_pred(&self) -> HashMap<BlockId, HashSet<BlockId>> {
-        Self::calculate_pred_inner(&self.blocks, self.bid_init)
-    }
-
     pub fn dom_tree(&self) -> HashMap<BlockId, Vec<BlockId>> {
         let rpo = self.reverse_post_order();
         let pred = self.calculate_pred();
         let dom = calculate_dominator(self, &pred);
-        let idom = calculate_idom(self, &dom, rpo);
+        let idom = self.calculate_idom(&dom, rpo);
 
         let mut res: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
 
@@ -519,23 +413,7 @@ impl FunctionDefinition {
         res
     }
 }
-
-fn dfs_walker(
-    node: BlockId,
-    code: &FunctionDefinition,
-    visited: &mut HashSet<BlockId>,
-    order: &mut Vec<BlockId>,
-) {
-    let true = visited.insert(node) else {
-        unreachable!()
-    };
-    for succ in code.blocks.get(&node).unwrap().exit.walk_jump_bid() {
-        if !visited.contains(&succ) {
-            dfs_walker(succ, code, visited, order);
-        }
-    }
-    order.push(node);
-}
+ */
 
 fn dominance_frontier(
     dom: &HashMap<BlockId, HashSet<BlockId>>,
