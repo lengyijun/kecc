@@ -3896,18 +3896,19 @@ fn translate_block(
             _ => unreachable!("{:?}", &**instr),
         }
 
-        let edits = output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::after(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp));
-        res.extend(edits);
+        res.extend(
+            output
+                .edits
+                .iter()
+                .filter_map(|(prog_point, edit)| {
+                    if *prog_point == regalloc2::ProgPoint::after(insn) {
+                        Some(edit)
+                    } else {
+                        None
+                    }
+                })
+                .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+        );
     }
 
     // no edit before/after
