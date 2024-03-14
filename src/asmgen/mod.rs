@@ -4850,6 +4850,7 @@ enum RegisterCouple {
     MergedToPrevious,
 }
 
+/// only used in FunctionAbi
 #[derive(Debug, Clone, Copy)]
 enum RegOrStack {
     Reg(Register),
