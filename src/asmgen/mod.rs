@@ -13,7 +13,8 @@ use crate::asmgen::helper::constant_2_allocation;
 use crate::ir::{
     self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
 };
-use crate::Translate;
+use crate::opt::deadcode::DeadcodeInner;
+use crate::{Deadcode, Optimize, Translate};
 use bimap::BiMap;
 use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
@@ -118,11 +119,14 @@ impl Translate<ir::TranslationUnit> for Asmgen {
                 continue;
             };
 
+            let mut definition = definition.as_ref().unwrap().clone();
+            let _ = DeadcodeInner::default().optimize(&mut definition);
+
             // before gen detailed asm::Instruction
             // we need to allocate register first
             // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
             let gape = helper::Gape::from_definition(
-                definition.as_ref().unwrap(),
+                &definition,
                 function_abi_mp.get(func_name).unwrap().clone(),
                 &function_abi_mp,
                 source,
