@@ -255,10 +255,7 @@ fn translate_function(
 ) -> asm::Function {
     let mut function: asm::Function = asm::Function { blocks: vec![] };
 
-    let abi @ FunctionAbi {
-        params_alloc: params,
-        ..
-    } = function_abi_mp.get(func_name).unwrap();
+    let FunctionAbi { params_alloc, .. } = function_abi_mp.get(func_name).unwrap();
 
     let mut stack_offset_2_s0: i64 = 0;
 
@@ -274,7 +271,7 @@ fn translate_function(
 
     let mut alloc_arg = vec![];
 
-    for (aid, (alloc, dtype)) in izip!(params, &signature.params).enumerate() {
+    for (aid, (alloc, dtype)) in izip!(params_alloc, &signature.params).enumerate() {
         let register_id = RegisterId::Arg {
             bid: gape.bid_init,
             aid,
