@@ -1,6 +1,6 @@
 use crate::*;
 
-mod deadcode;
+pub mod deadcode;
 pub mod domtree;
 mod gvn;
 mod mem2reg;
