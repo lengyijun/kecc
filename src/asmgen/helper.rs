@@ -165,19 +165,30 @@ impl<'a> Gape<'a> {
             bb.phinodes
                 .iter()
                 .enumerate()
-                .map(move |(aid, dtype)| (RegisterId::Arg { bid, aid }, dtype.deref()))
+                .map(move |(aid, dtype)| (RegisterId::Arg { bid, aid }, dtype.deref().clone()))
         });
 
-        let used_register_iter =
-            blocks
+        let temp_iter = blocks.iter().flat_map(|(bid, block)| {
+            block
+                .instructions
                 .iter()
-                .flat_map(|(_, b)| b.walk_register())
-                .filter(|(rid, _)| match rid {
-                    RegisterId::Local { .. } => false,
-                    RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
-                });
+                .enumerate()
+                .filter_map(|(iid, instr)| {
+                    let dtype = instr.dtype();
+                    match &dtype {
+                        Dtype::Unit { .. } => None,
+                        Dtype::Int { .. } | Dtype::Float { .. } | Dtype::Pointer { .. } => {
+                            Some((RegisterId::Temp { bid: *bid, iid }, dtype))
+                        }
+                        Dtype::Struct { .. } => None,
+                        Dtype::Array { .. } | Dtype::Function { .. } | Dtype::Typedef { .. } => {
+                            unreachable!()
+                        }
+                    }
+                })
+        });
 
-        for (rid, dtype) in arg_iter.chain(used_register_iter) {
+        for (rid, dtype) in arg_iter.chain(temp_iter) {
             match dtype {
                 // struct : block paramter may be indirect register
                 Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Struct { .. } => {
@@ -653,8 +664,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                 regalloc2::OperandPos::Late,
                             )),
                             None => {
-                                // result never used
-                                return &[];
+                                unreachable!("{rid}")
                             }
                         }
                     }

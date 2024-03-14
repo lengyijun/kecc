@@ -794,7 +794,7 @@ fn translate_block(
                 ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. } => {
                     let reg = match allocations.next() {
                         Some(reg) => reg,
-                        None => continue 'instr_loop,
+                        None => unreachable!(),
                     };
                     let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
                 }
@@ -855,7 +855,7 @@ fn translate_block(
                         ir::Dtype::Int { .. }
                         | ir::Dtype::Pointer { .. }
                         | ir::Dtype::Float { .. } => {
-                            let _ = register_mp.remove(&rid);
+                            unreachable!()
                         }
                         ir::Dtype::Struct { .. } => {
                             // doesn't matter
