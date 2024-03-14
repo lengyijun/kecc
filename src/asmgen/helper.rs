@@ -14,8 +14,8 @@ use crate::{
     asm::{self, DataSize, Pseudo, Register, RegisterType},
     asmgen::{DirectOrInDirect, RegOrStack},
     ir::{
-        self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand,
-        RegisterId,
+        self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Named,
+        Operand, RegisterId,
     },
     opt::domtree::{calculate_pred_inner, DomTree},
     SimplifyCfgReach,
@@ -109,6 +109,7 @@ pub struct Gape<'a> {
     pub bid_init: BlockId,
 
     /// copy from environmen
+    pub allocations: Vec<Named<Dtype>>,
     pub function_abi_mp: &'a HashMap<String, FunctionAbi>,
     pub source: &'a ir::TranslationUnit,
 
@@ -268,6 +269,7 @@ impl<'a> Gape<'a> {
             abi,
             function_abi_mp,
             source,
+            definition.allocations.clone(),
         )
     }
 
@@ -277,6 +279,7 @@ impl<'a> Gape<'a> {
         abi: FunctionAbi,
         function_abi_mp: &'a HashMap<String, FunctionAbi>,
         source: &'a ir::TranslationUnit,
+        allocations: Vec<Named<Dtype>>,
     ) -> Self {
         for b in blocks.values_mut() {
             let _ = b.exit.optimize();
@@ -309,6 +312,7 @@ impl<'a> Gape<'a> {
             num_vregs: a,
             function_abi_mp,
             source,
+            allocations,
         }
     }
 }

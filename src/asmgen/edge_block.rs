@@ -71,6 +71,7 @@ impl<'a> Gape<'a> {
                     self.abi,
                     self.function_abi_mp,
                     self.source,
+                    self.allocations,
                 );
             } else {
                 break;
