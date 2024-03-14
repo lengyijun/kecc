@@ -3980,9 +3980,19 @@ fn translate_block(
         ir::BlockExit::Jump { arg } => {
             gen_jump_arg(func_name, arg, &mut res, register_mp, float_mp);
         }
+        ir::BlockExit::ConditionalJump {
+            condition: ir::Operand::Constant(_),
+            ..
+        }
+        | ir::BlockExit::Switch {
+            value: ir::Operand::Constant(_),
+            ..
+        } => {
+            unreachable!("should be optimized in ir")
+        }
 
         ir::BlockExit::ConditionalJump {
-            condition,
+            condition: ir::Operand::Register { .. },
             arg_then,
             arg_else,
         } => {
@@ -4019,7 +4029,7 @@ fn translate_block(
         }
 
         ir::BlockExit::Switch {
-            value,
+            value: value @ ir::Operand::Register { .. },
             default,
             cases,
         } => {
