@@ -117,12 +117,106 @@ impl Translate<ir::TranslationUnit> for Asmgen {
             else {
                 continue;
             };
+
+            // before gen detailed asm::Instruction
+            // we need to allocate register first
+            // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
+            let gape = helper::Gape::from_definition(
+                definition.as_ref().unwrap(),
+                function_abi_mp.get(func_name).unwrap().clone(),
+                &function_abi_mp,
+                source,
+            );
+            let gape = Gape::foo(gape);
+            let gape = Gape::add_edge_block(gape);
+            let output = regalloc2::run(
+                &gape,
+                &MachineEnv {
+                    preferred_regs_by_class: [
+                        vec![
+                            Register::A0.into(),
+                            Register::A1.into(),
+                            Register::A2.into(),
+                            Register::A3.into(),
+                            Register::A4.into(),
+                            Register::A5.into(),
+                        ],
+                        vec![
+                            Register::FA0.into(),
+                            Register::FA1.into(),
+                            Register::FA2.into(),
+                            Register::FA3.into(),
+                            Register::FA4.into(),
+                            Register::FA5.into(),
+                        ],
+                        vec![],
+                    ],
+                    non_preferred_regs_by_class: [
+                        // TODO: can we use T5 T6 ?
+                        vec![
+                            // Register::T0.into(),
+                            // Register::T1.into(),
+                            // Register::T2.into(),
+                            Register::A6.into(),
+                            Register::A7.into(),
+                            // Register::T3.into(),
+                            // Register::T4.into(),
+                            Register::S2.into(),
+                            Register::S3.into(),
+                            Register::S4.into(),
+                            Register::S5.into(),
+                            Register::S6.into(),
+                            Register::S7.into(),
+                            Register::S8.into(),
+                            Register::S9.into(),
+                            Register::S10.into(),
+                            Register::S11.into(),
+                        ],
+                        vec![
+                            // Register::FT0.into(),
+                            // Register::FT1.into(),
+                            Register::FT2.into(),
+                            Register::FT3.into(),
+                            Register::FT4.into(),
+                            Register::FT5.into(),
+                            Register::FT6.into(),
+                            Register::FT7.into(),
+                            Register::FA6.into(),
+                            Register::FA7.into(),
+                            Register::FT8.into(),
+                            Register::FT9.into(),
+                            Register::FT10.into(),
+                            Register::FT11.into(),
+                            Register::FS2.into(),
+                            Register::FS3.into(),
+                            Register::FS4.into(),
+                            Register::FS5.into(),
+                            Register::FS6.into(),
+                            Register::FS7.into(),
+                            Register::FS8.into(),
+                            Register::FS9.into(),
+                            Register::FS10.into(),
+                            Register::FS11.into(),
+                        ],
+                        vec![],
+                    ],
+                    scratch_by_class: [None, None, None],
+                    fixed_stack_slots: vec![],
+                },
+                &regalloc2::RegallocOptions {
+                    verbose_log: true,
+                    validate_ssa: true,
+                },
+            )
+            .unwrap();
+
             asm.unit.functions.push(Section {
                 header: vec![Directive::Globl(Label(func_name.to_owned()))],
                 body: translate_function(
                     func_name,
                     signature,
-                    definition.as_ref().unwrap(),
+                    gape,
+                    output,
                     &function_abi_mp,
                     source,
                     &mut float_mp,
@@ -149,7 +243,8 @@ impl Translate<ir::TranslationUnit> for Asmgen {
 fn translate_function(
     func_name: &str,
     signature: &FunctionSignature,
-    definition: &FunctionDefinition,
+    gape: Gape<'_>,
+    output: regalloc2::Output,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     source: &ir::TranslationUnit,
     float_mp: &mut FloatMp,
@@ -177,7 +272,7 @@ fn translate_function(
 
     for (aid, (alloc, dtype)) in izip!(params, &signature.params).enumerate() {
         let register_id = RegisterId::Arg {
-            bid: definition.bid_init,
+            bid: gape.bid_init,
             aid,
         };
         match alloc {
@@ -310,7 +405,7 @@ fn translate_function(
 
     let mut init_allocation = vec![];
 
-    for (aid, dtype) in definition.allocations.iter().enumerate() {
+    for (aid, dtype) in gape.allocations.iter().enumerate() {
         let (size, align) = dtype.size_align_of(&source.structs).unwrap();
         let align: i64 = align.max(4).try_into().unwrap();
         while stack_offset_2_s0 % align != 0 {
@@ -344,7 +439,7 @@ fn translate_function(
         };
     }
 
-    for (&bid, block) in definition.blocks.iter() {
+    for (&bid, block) in gape.blocks.iter() {
         for (iid, instr) in block.instructions.iter().enumerate() {
             let dtype = instr.dtype();
             match &dtype {
@@ -373,98 +468,6 @@ fn translate_function(
             }
         }
     }
-
-    // before gen detailed asm::Instruction
-    // we need to allocate register first
-    // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
-    let gape = helper::Gape::from_definition(
-        definition,
-        function_abi_mp.get(func_name).unwrap().clone(),
-        function_abi_mp,
-        source,
-    );
-    let gape = Gape::foo(gape);
-    let gape = Gape::add_edge_block(gape);
-    let output = regalloc2::run(
-        &gape,
-        &MachineEnv {
-            preferred_regs_by_class: [
-                vec![
-                    Register::A0.into(),
-                    Register::A1.into(),
-                    Register::A2.into(),
-                    Register::A3.into(),
-                    Register::A4.into(),
-                    Register::A5.into(),
-                ],
-                vec![
-                    Register::FA0.into(),
-                    Register::FA1.into(),
-                    Register::FA2.into(),
-                    Register::FA3.into(),
-                    Register::FA4.into(),
-                    Register::FA5.into(),
-                ],
-                vec![],
-            ],
-            non_preferred_regs_by_class: [
-                // TODO: can we use T5 T6 ?
-                vec![
-                    // Register::T0.into(),
-                    // Register::T1.into(),
-                    // Register::T2.into(),
-                    Register::A6.into(),
-                    Register::A7.into(),
-                    // Register::T3.into(),
-                    // Register::T4.into(),
-                    Register::S2.into(),
-                    Register::S3.into(),
-                    Register::S4.into(),
-                    Register::S5.into(),
-                    Register::S6.into(),
-                    Register::S7.into(),
-                    Register::S8.into(),
-                    Register::S9.into(),
-                    Register::S10.into(),
-                    Register::S11.into(),
-                ],
-                vec![
-                    // Register::FT0.into(),
-                    // Register::FT1.into(),
-                    Register::FT2.into(),
-                    Register::FT3.into(),
-                    Register::FT4.into(),
-                    Register::FT5.into(),
-                    Register::FT6.into(),
-                    Register::FT7.into(),
-                    Register::FA6.into(),
-                    Register::FA7.into(),
-                    Register::FT8.into(),
-                    Register::FT9.into(),
-                    Register::FT10.into(),
-                    Register::FT11.into(),
-                    Register::FS2.into(),
-                    Register::FS3.into(),
-                    Register::FS4.into(),
-                    Register::FS5.into(),
-                    Register::FS6.into(),
-                    Register::FS7.into(),
-                    Register::FS8.into(),
-                    Register::FS9.into(),
-                    Register::FS10.into(),
-                    Register::FS11.into(),
-                ],
-                vec![],
-            ],
-            scratch_by_class: [None, None, None],
-            fixed_stack_slots: vec![],
-        },
-        &regalloc2::RegallocOptions {
-            verbose_log: true,
-            validate_ssa: true,
-        },
-    )
-    .unwrap();
 
     /*
     for i in 0..gape.inst_mp.len() {
@@ -704,10 +707,7 @@ fn translate_function(
     }
 
     let init_block = function.blocks.first_mut().unwrap();
-    assert_eq!(
-        init_block.label,
-        Some(Label::new(func_name, definition.bid_init))
-    );
+    assert_eq!(init_block.label, Some(Label::new(func_name, gape.bid_init)));
     backup_ra_and_init_sp.extend(std::mem::replace(&mut init_block.instructions, Vec::new()));
     *init_block = asm::Block {
         label: Some(Label(func_name.to_owned())),
