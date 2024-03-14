@@ -17,6 +17,7 @@ use crate::{
         self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Operand,
         RegisterId,
     },
+    opt::domtree::{calculate_pred_inner, DomTree},
     SimplifyCfgReach,
 };
 
@@ -297,7 +298,7 @@ impl<'a> Gape<'a> {
             inst_mp: Frozen::freeze(Self::init_inst_mp(&blocks)),
             block_mp: Frozen::freeze(Self::init_block_mp(&blocks)),
             pred_mp: Frozen::freeze(
-                FunctionDefinition::calculate_pred_inner(&blocks, bid_init)
+                calculate_pred_inner(bid_init, &blocks)
                     .into_iter()
                     .map(|(x, y)| (x, y.into_iter().collect()))
                     .collect(),
@@ -894,4 +895,14 @@ fn whole_pregset() -> regalloc2::PRegSet {
     res.add(Register::FA6.into());
     res.add(Register::FA7.into());
     res
+}
+
+impl DomTree for Gape<'_> {
+    fn init_block(&self) -> BlockId {
+        self.bid_init
+    }
+
+    fn blocks(&self) -> &BTreeMap<BlockId, ir::Block> {
+        &self.blocks
+    }
 }
