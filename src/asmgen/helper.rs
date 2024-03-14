@@ -470,14 +470,6 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                 | crate::asmgen::ParamAlloc::PrimitiveType(
                                     DirectOrInDirect::InDirect(RegOrStack::Stack { .. }),
                                 ) => None,
-                                crate::asmgen::ParamAlloc::PrimitiveType(
-                                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }),
-                                )
-                                | crate::asmgen::ParamAlloc::PrimitiveType(
-                                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure {
-                                        ..
-                                    }),
-                                ) => unreachable!(),
                                 crate::asmgen::ParamAlloc::StructInRegister(_) => None,
                             }
                         })
@@ -626,9 +618,6 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                                     ..
                                                 }),
                                             ) => {}
-                                            super::ParamAlloc::PrimitiveType(
-                                                DirectOrInDirect::InDirect(_),
-                                            ) => unreachable!(),
                                             super::ParamAlloc::StructInRegister(_) => {
                                                 // always on stack
                                             }

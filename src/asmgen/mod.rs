@@ -305,14 +305,6 @@ fn translate_function(
                     unreachable!()
                 };
             }
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::IntRegNotSure {
-                ..
-            }))
-            | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure {
-                ..
-            })) => {
-                unreachable!()
-            }
         }
     }
 
@@ -829,7 +821,6 @@ fn translate_block(
                                 )) => {
                                     // do nothing
                                 }
-                                ParamAlloc::PrimitiveType(_) => unreachable!(),
                                 ParamAlloc::StructInRegister(_) => {
                                     // on stack
                                     // do nothing
@@ -948,9 +939,6 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
-                            }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
                         }
                     }
@@ -982,9 +970,6 @@ fn translate_block(
                                     Register::FT0,
                                     *offset_to_s0 as u64,
                                 ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
                         }
@@ -1027,9 +1012,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1066,9 +1048,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1100,9 +1079,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1180,9 +1156,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1226,9 +1199,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1265,9 +1235,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1315,9 +1282,6 @@ fn translate_block(
                             Register::FT0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1379,9 +1343,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1418,9 +1379,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1469,9 +1427,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1509,9 +1464,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1559,9 +1511,6 @@ fn translate_block(
                             Register::FT0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1601,9 +1550,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -1650,9 +1596,6 @@ fn translate_block(
                             Register::FT0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -1719,9 +1662,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -2494,9 +2434,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2552,9 +2489,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2601,9 +2535,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2641,9 +2572,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -2683,9 +2611,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -2723,9 +2648,6 @@ fn translate_block(
                             Register::T0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -2816,9 +2738,6 @@ fn translate_block(
                         ));
                         Register::T3
                     }
-                    RegOrStack::IntRegNotSure { .. } => {
-                        unreachable!()
-                    }
                 };
                 match register_mp.get(value_rid).unwrap() {
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: src }) => {
@@ -2840,9 +2759,6 @@ fn translate_block(
                             0,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(src) => {
                         let source_location = match src {
                             RegOrStack::Reg(reg) => *reg,
@@ -2854,9 +2770,6 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                                 Register::T2
-                            }
-                            RegOrStack::IntRegNotSure { .. } => {
-                                unreachable!()
                             }
                         };
                         cp_from_indirect_to_indirect(
@@ -2917,9 +2830,6 @@ fn translate_block(
                         ));
                         Register::T2
                     }
-                    RegOrStack::IntRegNotSure { .. } => {
-                        unreachable!()
-                    }
                 };
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -2940,9 +2850,6 @@ fn translate_block(
                             &mut res,
                             source,
                         );
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -2984,7 +2891,6 @@ fn translate_block(
                         *offset_to_s0 as u64,
                     ));
                 }
-                DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => unreachable!(),
                 DirectOrInDirect::InDirect(_) => unreachable!(),
             },
             ir::Instruction::Load {
@@ -3020,9 +2926,6 @@ fn translate_block(
                             Register::FT0,
                             *offset_to_s0 as u64,
                         ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
                     }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
@@ -3122,9 +3025,6 @@ fn translate_block(
                                 ));
                             }
                             DirectOrInDirect::Direct(RegOrStack::Reg(_)) => unreachable!(),
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
-                            }
                             DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
                                 after_cp_parallel.extend(mk_itype(
                                     IType::LD,
@@ -3137,9 +3037,6 @@ fn translate_block(
                                 if *src_reg != target_reg {
                                     to_be_cp_parallel.push((*src_reg, target_reg, operand.dtype()));
                                 }
-                            }
-                            DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
                             }
                         },
                         (
@@ -3188,10 +3085,6 @@ fn translate_block(
                                     *reg,
                                     target_offset as u64,
                                 ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                            | DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
                             }
                         },
                         (
@@ -3321,9 +3214,6 @@ fn translate_block(
                                 ));
                                 Register::T0
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
-                            }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
                         };
                         res.push(asm::Instruction::Pseudo(Pseudo::Jalr { rs }));
@@ -3348,9 +3238,6 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                             }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
-                            }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
                         }
                     }
@@ -3370,9 +3257,6 @@ fn translate_block(
                                     Register::FA0,
                                     *offset_to_s0 as u64,
                                 ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                                unreachable!()
                             }
                             DirectOrInDirect::InDirect(_) => unreachable!(),
                         }
@@ -4004,9 +3888,6 @@ fn translate_block(
                             *offset_to_s0 as u64,
                         ));
                     }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => {
-                        unreachable!()
-                    }
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
@@ -4467,7 +4348,6 @@ fn load_operand_to_reg(
                 ));
                 or_register
             }
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. }) => unreachable!(),
             DirectOrInDirect::InDirect(_) => unreachable!(),
         },
     }
@@ -4972,15 +4852,8 @@ enum RegisterCouple {
 
 #[derive(Debug, Clone, Copy)]
 enum RegOrStack {
-    /// to be allocated
-    IntRegNotSure {
-        /// prefer to be allocate as src
-        src: Option<Register>,
-    },
     Reg(Register),
-    Stack {
-        offset_to_s0: i64,
-    },
+    Stack { offset_to_s0: i64 },
 }
 
 #[derive(Debug, Clone)]
@@ -5590,7 +5463,6 @@ fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
         | DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => Some(*reg),
         DirectOrInDirect::Direct(RegOrStack::Stack { .. })
         | DirectOrInDirect::InDirect(RegOrStack::Stack { .. }) => None,
-        _ => unreachable!(),
     }
 }
 
