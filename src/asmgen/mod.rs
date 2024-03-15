@@ -1644,77 +1644,6 @@ fn translate_block(
                     DirectOrInDirect::InDirect(_) => unreachable!(),
                 }
             }
-            ir::Instruction::UnaryOp {
-                op: UnaryOperator::Plus,
-                operand: operand @ ir::Operand::Register { .. },
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let reg = load_operand_to_reg(
-                    operand.clone(),
-                    Register::T0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                            rd: *dest_reg,
-                            rs: reg,
-                        }));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            reg,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
-                        unreachable!()
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::UnaryOp {
-                op: UnaryOperator::Plus,
-                operand: operand @ ir::Operand::Register { .. },
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let reg = load_operand_to_reg(
-                    operand.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
-                            rd: *dest_reg,
-                            rs: reg,
-                            data_size: DataSize::try_from(dtype.clone()).unwrap(),
-                        }));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            reg,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
-                        unreachable!()
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
             ir::Instruction::BinOp {
                 op,
                 lhs: ir::Operand::Constant(c1),
@@ -1741,22 +1670,6 @@ fn translate_block(
                         ));
                     }
                     (
-                        Value::Float { value, width },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let label = float_mp.get_label(Float { value, width });
-                        res.push(asm::Instruction::Pseudo(Pseudo::La {
-                            rd: Register::T0,
-                            symbol: label,
-                        }));
-                        res.push(asm::Instruction::IType {
-                            instr: IType::load(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(0),
-                        });
-                    }
-                    (
                         Value::Int { value, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
@@ -1771,28 +1684,6 @@ fn translate_block(
                             SType::store(dtype.clone()),
                             Register::S0,
                             Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        Value::Float { value, width },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let label = float_mp.get_label(Float { value, width });
-                        res.push(asm::Instruction::Pseudo(Pseudo::La {
-                            rd: Register::T0,
-                            symbol: label,
-                        }));
-                        res.push(asm::Instruction::IType {
-                            instr: IType::load(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(0),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
                             *offset_to_s0 as u64,
                         ));
                     }
