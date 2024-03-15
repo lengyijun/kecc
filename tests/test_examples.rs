@@ -3,9 +3,9 @@ use std::path::Path;
 
 use kecc::*;
 
-fn test_dir<F>(path: &Path, ext: &OsStr, f: F)
+fn test_dir<F>(path: &Path, ext: &OsStr, mut f: F)
 where
-    F: Fn(&Path),
+    F: FnMut(&Path),
 {
     let dir = path.read_dir().expect("read_dir call failed");
     for entry in dir {
@@ -234,6 +234,19 @@ fn test_examples_asmgen_large() {
 }
 
 #[test]
-fn test_examples_end_to_end() {
-    test_dir(Path::new("examples/c"), OsStr::new("c"), test_end_to_end);
+fn test_examples_end_to_end_o1() {
+    test_dir(
+        Path::new("examples/c"),
+        OsStr::new("c"),
+        test_end_to_end("endtoendo1", &mut O1::default()),
+    );
+}
+
+#[test]
+fn test_examples_end_to_end_o2() {
+    test_dir(
+        Path::new("examples/c"),
+        OsStr::new("c"),
+        test_end_to_end("endtoendo2", &mut O2::default()),
+    );
 }
