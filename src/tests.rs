@@ -379,164 +379,170 @@ pub fn test_asmgen(path: &Path) {
 }
 
 /// Tests end-to-end translation.
-pub fn test_end_to_end(path: &Path) {
-    // Check if the file has .c extension
-    assert_eq!(path.extension(), Some(std::ffi::OsStr::new("c")));
+pub fn test_end_to_end<'a, O: Optimize<ir::TranslationUnit>>(
+    extension: &'static str,
+    opt: &'a mut O,
+) -> impl FnMut(&Path) + 'a {
+    move |path: &Path| {
+        // Check if the file has .c extension
+        assert_eq!(path.extension(), Some(std::ffi::OsStr::new("c")));
 
-    // Test parse
-    let unit = Parse
-        .translate(&path)
-        .unwrap_or_else(|_| panic!("parse failed {}", path.display()));
+        // Test parse
+        let unit = Parse
+            .translate(&path)
+            .unwrap_or_else(|_| panic!("parse failed {}", path.display()));
 
-    let file_path = path.display().to_string();
-    let bin_path = path
-        .with_extension("endtoend")
-        .as_path()
-        .display()
-        .to_string();
+        let file_path = path.display().to_string();
+        let bin_path = path
+            .with_extension(extension)
+            .as_path()
+            .display()
+            .to_string();
 
-    // Compile c file: If fails, test is vacuously success
-    if !Command::new("clang")
-        .args([
-            "-fsanitize=float-divide-by-zero",
-            "-fsanitize=undefined",
-            "-fno-sanitize-recover=all",
-            &file_path,
-            "-o",
-            &bin_path,
-        ])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
-    {
-        ::std::process::exit(SKIP_TEST);
-    }
-
-    // Execute compiled executable
-    let mut child = Command::new(fs::canonicalize(bin_path.clone()).unwrap())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute the compiled executable");
-
-    let _ = Command::new("rm")
-        .arg(bin_path)
-        .status()
-        .expect("failed to remove compiled executable");
-
-    let status = some_or!(
-        child
-            .wait_timeout_ms(1000)
-            .expect("failed to obtain exit status from child process"),
+        // Compile c file: If fails, test is vacuously success
+        if !Command::new("clang")
+            .args([
+                "-fsanitize=float-divide-by-zero",
+                "-fsanitize=undefined",
+                "-fno-sanitize-recover=all",
+                &file_path,
+                "-o",
+                &bin_path,
+            ])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
         {
-            println!("timeout occurs");
-            child.kill().unwrap();
-            let _ = child.wait().unwrap();
             ::std::process::exit(SKIP_TEST);
         }
-    );
 
-    if child
-        .stderr
-        .expect("`stderr` of `child` must be `Some`")
-        .bytes()
-        .next()
-        .is_some()
-    {
-        println!("error occurs");
-        ::std::process::exit(SKIP_TEST);
-    }
+        // Execute compiled executable
+        let mut child = Command::new(fs::canonicalize(bin_path.clone()).unwrap())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to execute the compiled executable");
 
-    let clang_status = some_or_exit!(status.code(), SKIP_TEST);
+        let _ = Command::new("rm")
+            .arg(bin_path)
+            .status()
+            .expect("failed to remove compiled executable");
 
-    // Execute optimized IR
-    let mut ir = Irgen::default()
-        .translate(&unit)
-        .unwrap_or_else(|irgen_error| panic!("{}", irgen_error));
-    let _ = O1::default().optimize(&mut ir);
-    let args = Vec::new();
-    let result = ir::interp(&ir, args).unwrap_or_else(|interp_error| panic!("{}", interp_error));
-    // We only allow a main function whose return type is `int`
-    let (value, width, is_signed) = result.get_int().expect("non-integer value occurs");
-    assert_eq!(width, 32);
-    assert!(is_signed);
+        let status = some_or!(
+            child
+                .wait_timeout_ms(1000)
+                .expect("failed to obtain exit status from child process"),
+            {
+                println!("timeout occurs");
+                child.kill().unwrap();
+                let _ = child.wait().unwrap();
+                ::std::process::exit(SKIP_TEST);
+            }
+        );
 
-    // When obtaining status from `clang` executable process, the status value is truncated to byte
-    // size. For this reason, we make `fuzzer` generate the C source code which returns values
-    // typecasted to `unsigned char`. However, during `creduce` to reduce the code, typecasting may
-    // be nullified. So, we truncate the result value to byte size one more time here.
-    println!(
-        "clang (expected): {}, kecc interp: {}",
-        clang_status as u8, value as u8
-    );
-    assert_eq!(clang_status as u8, value as u8);
-
-    // Generate RISC-V assembly from IR
-    let asm = Asmgen::default()
-        .translate(&ir)
-        .expect("fail to create riscv assembly code");
-
-    let temp_dir = tempdir().expect("temp dir creation failed");
-    let asm_path = temp_dir.path().join("temp.S");
-    let asm_path_str = asm_path.as_path().display().to_string();
-    let bin_path_str = asm_path
-        .with_extension("asmgen")
-        .as_path()
-        .display()
-        .to_string();
-
-    // Create the assembly code
-    let mut buffer = File::create(asm_path.as_path()).expect("need to success creating file");
-    write(&asm, &mut buffer).unwrap();
-
-    // Compile the assembly code
-    if !Command::new("riscv64-linux-gnu-gcc")
-        .args(["-static", &asm_path_str, "-o", &bin_path_str])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
-    {
-        ::std::process::exit(SKIP_TEST);
-    }
-
-    // Emulate the executable
-    let mut child = Command::new("qemu-riscv64-static")
-        .args([&bin_path_str])
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute the compiled executable");
-
-    let status = some_or!(
-        child
-            .wait_timeout_ms(1000)
-            .expect("failed to obtain exit status from child process"),
+        if child
+            .stderr
+            .expect("`stderr` of `child` must be `Some`")
+            .bytes()
+            .next()
+            .is_some()
         {
-            println!("timeout occurs");
-            child.kill().unwrap();
-            let _ = child.wait().unwrap();
+            println!("error occurs");
             ::std::process::exit(SKIP_TEST);
         }
-    );
 
-    if child
-        .stderr
-        .expect("`stderr` of `child` must be `Some`")
-        .bytes()
-        .next()
-        .is_some()
-    {
-        println!("error occurs");
-        ::std::process::exit(SKIP_TEST);
+        let clang_status = some_or_exit!(status.code(), SKIP_TEST);
+
+        // Execute optimized IR
+        let mut ir = Irgen::default()
+            .translate(&unit)
+            .unwrap_or_else(|irgen_error| panic!("{}", irgen_error));
+        let _ = opt.optimize(&mut ir);
+        let args = Vec::new();
+        let result =
+            ir::interp(&ir, args).unwrap_or_else(|interp_error| panic!("{}", interp_error));
+        // We only allow a main function whose return type is `int`
+        let (value, width, is_signed) = result.get_int().expect("non-integer value occurs");
+        assert_eq!(width, 32);
+        assert!(is_signed);
+
+        // When obtaining status from `clang` executable process, the status value is truncated to byte
+        // size. For this reason, we make `fuzzer` generate the C source code which returns values
+        // typecasted to `unsigned char`. However, during `creduce` to reduce the code, typecasting may
+        // be nullified. So, we truncate the result value to byte size one more time here.
+        println!(
+            "clang (expected): {}, kecc interp: {}",
+            clang_status as u8, value as u8
+        );
+        assert_eq!(clang_status as u8, value as u8);
+
+        // Generate RISC-V assembly from IR
+        let asm = Asmgen::default()
+            .translate(&ir)
+            .expect("fail to create riscv assembly code");
+
+        let temp_dir = tempdir().expect("temp dir creation failed");
+        let asm_path = temp_dir.path().join("temp.S");
+        let asm_path_str = asm_path.as_path().display().to_string();
+        let bin_path_str = asm_path
+            .with_extension("asmgen")
+            .as_path()
+            .display()
+            .to_string();
+
+        // Create the assembly code
+        let mut buffer = File::create(asm_path.as_path()).expect("need to success creating file");
+        write(&asm, &mut buffer).unwrap();
+
+        // Compile the assembly code
+        if !Command::new("riscv64-linux-gnu-gcc")
+            .args(["-static", &asm_path_str, "-o", &bin_path_str])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            ::std::process::exit(SKIP_TEST);
+        }
+
+        // Emulate the executable
+        let mut child = Command::new("qemu-riscv64-static")
+            .args([&bin_path_str])
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to execute the compiled executable");
+
+        let status = some_or!(
+            child
+                .wait_timeout_ms(1000)
+                .expect("failed to obtain exit status from child process"),
+            {
+                println!("timeout occurs");
+                child.kill().unwrap();
+                let _ = child.wait().unwrap();
+                ::std::process::exit(SKIP_TEST);
+            }
+        );
+
+        if child
+            .stderr
+            .expect("`stderr` of `child` must be `Some`")
+            .bytes()
+            .next()
+            .is_some()
+        {
+            println!("error occurs");
+            ::std::process::exit(SKIP_TEST);
+        }
+
+        let qemu_status = some_or_exit!(status.code(), SKIP_TEST);
+        drop(buffer);
+        temp_dir.close().expect("temp dir deletion failed");
+
+        println!(
+            "clang (expected): {}, qemu: {}",
+            clang_status as u8, qemu_status as u8
+        );
+        assert_eq!(clang_status as u8, qemu_status as u8);
     }
-
-    let qemu_status = some_or_exit!(status.code(), SKIP_TEST);
-    drop(buffer);
-    temp_dir.close().expect("temp dir deletion failed");
-
-    println!(
-        "clang (expected): {}, qemu: {}",
-        clang_status as u8, qemu_status as u8
-    );
-    assert_eq!(clang_status as u8, qemu_status as u8);
 }

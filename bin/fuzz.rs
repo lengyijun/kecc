@@ -77,7 +77,7 @@ fn main() {
     }
 
     if matches.end_to_end {
-        kecc::test_end_to_end(Path::new(&input));
+        kecc::test_end_to_end("endtoend", &mut O1::default())(Path::new(&input));
         return;
     }
 

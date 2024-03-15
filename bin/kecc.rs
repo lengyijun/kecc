@@ -11,7 +11,7 @@ use tempfile::tempdir;
 
 use kecc::{
     ir, ok_or_exit, write, Asmgen, Deadcode, Gvn, IrParse, IrVisualizer, Irgen, Mem2reg, Optimize,
-    Parse, SimplifyCfg, Translate, O1,
+    Parse, SimplifyCfg, Translate, O1, O2,
 };
 
 #[derive(Debug, Parser)]
@@ -48,6 +48,9 @@ struct KeccCli {
     /// Optimizes IR
     #[clap(short = 'O', long)]
     optimize: bool,
+
+    #[clap(long)]
+    O2: bool,
 
     /// Performs simplify-cfg
     #[clap(long = "simplify-cfg")]
@@ -141,7 +144,9 @@ fn compile_ir(
         return;
     }
 
-    if matches.optimize {
+    if matches.O2 {
+        O2::default().optimize(input);
+    } else if matches.optimize {
         O1::default().optimize(input);
     } else {
         if matches.simplify_cfg {

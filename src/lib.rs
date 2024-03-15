@@ -73,5 +73,5 @@ pub use asmgen::Asmgen;
 pub use irgen::Irgen;
 pub use opt::{
     Deadcode, FunctionPass, Gvn, Mem2reg, Optimize, Repeat, SimplifyCfg, SimplifyCfgConstProp,
-    SimplifyCfgEmpty, SimplifyCfgMerge, SimplifyCfgReach, O0, O1,
+    SimplifyCfgEmpty, SimplifyCfgMerge, SimplifyCfgReach, O0, O1, O2,
 };

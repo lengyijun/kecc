@@ -1,5 +1,6 @@
 use crate::*;
 
+pub mod constant_eval;
 pub mod deadcode;
 pub mod domtree;
 mod gvn;
@@ -14,12 +15,15 @@ pub use simplify_cfg::{
     SimplifyCfg, SimplifyCfgConstProp, SimplifyCfgEmpty, SimplifyCfgMerge, SimplifyCfgReach,
 };
 
+use constant_eval::ConstantEval;
+
 pub trait Optimize<T> {
     fn optimize(&mut self, code: &mut T) -> bool;
 }
 
 pub type O0 = Null;
 pub type O1 = Repeat<(SimplifyCfg, (Mem2reg, (Gvn, Deadcode)))>;
+pub type O2 = Repeat<(SimplifyCfg, (Mem2reg, (Gvn, (ConstantEval, Deadcode))))>;
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Null;
