@@ -6,13 +6,11 @@ use std::{
 
 use bimap::BiMap;
 use frozen::Frozen;
-use itertools::Itertools;
-use linked_hash_map::LinkedHashMap;
-use regalloc2::Allocation;
+use itertools::{izip, Itertools};
 
 use crate::{
     asm::{self, DataSize, Pseudo, Register, RegisterType},
-    asmgen::{DirectOrInDirect, RegOrStack},
+    asmgen::{clown, DirectOrInDirect, RegOrStack, RegisterCouple},
     ir::{
         self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Named,
         Operand, RegisterId,
@@ -21,7 +19,7 @@ use crate::{
     SimplifyCfgReach,
 };
 
-use super::{load_float_to_reg, load_int_to_reg, FloatMp, FunctionAbi};
+use super::{load_float_to_reg, load_int_to_reg, FloatMp, FunctionAbi, ParamAlloc};
 
 impl Into<regalloc2::RegClass> for RegisterType {
     fn into(self) -> regalloc2::RegClass {
@@ -97,6 +95,7 @@ pub enum Yank {
     /// init_block: deal with arguments
     /// otherwise: do nothing
     BlockEntry(BlockId),
+    BeforeInstruction(BlockId, usize),
     Instruction(BlockId, usize),
     AllocateConstBeforeJump(BlockId),
     BlockExit(BlockId),
@@ -124,6 +123,8 @@ pub struct Gape<'a> {
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
     /// only make sense in ConditionalJump/Switch
     pub constant_in_jumparg_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
+    /// Call/Noop: empty
+    pub constant_in_instruction_mp: Frozen<BTreeMap<(BlockId, usize), Vec<regalloc2::VReg>>>,
 
     num_vregs: usize,
 }
@@ -139,6 +140,10 @@ impl<'a> Gape<'a> {
                 .unwrap();
             insn = insn.next();
             for offset in 0..block.instructions.len() {
+                inst_mp
+                    .insert_no_overwrite(Yank::BeforeInstruction(bid, offset), insn)
+                    .unwrap();
+                insn = insn.next();
                 inst_mp
                     .insert_no_overwrite(Yank::Instruction(bid, offset), insn)
                     .unwrap();
@@ -270,6 +275,52 @@ impl<'a> Gape<'a> {
             .collect()
     }
 
+    fn init_constant_in_instruction(
+        blocks: &BTreeMap<BlockId, ir::Block>,
+        mut next_virt_reg: impl FnMut() -> usize,
+    ) -> BTreeMap<(BlockId, usize), Vec<regalloc2::VReg>> {
+        let mut res = BTreeMap::new();
+        for (bid, block) in blocks {
+            for (iid, instruction) in block.instructions.iter().enumerate() {
+                match &**instruction {
+                    ir::Instruction::Nop | ir::Instruction::Call { .. } => {}
+                    ir::Instruction::BinOp { .. }
+                    | ir::Instruction::UnaryOp { .. }
+                    | ir::Instruction::Store { .. }
+                    | ir::Instruction::Load { .. }
+                    | ir::Instruction::TypeCast { .. }
+                    | ir::Instruction::GetElementPtr { .. } => {
+                        let mut v = Vec::new();
+                        for c in instruction.walk_constant() {
+                            match c {
+                                Constant::GlobalVariable { .. } => {
+                                    // skip global variable
+                                }
+                                Constant::Unit | Constant::Undef { .. } => unreachable!(),
+                                Constant::Int { .. } => {
+                                    v.push(regalloc2::VReg::new(
+                                        next_virt_reg(),
+                                        regalloc2::RegClass::Int,
+                                    ));
+                                }
+                                Constant::Float { .. } => {
+                                    v.push(regalloc2::VReg::new(
+                                        next_virt_reg(),
+                                        regalloc2::RegClass::Float,
+                                    ));
+                                }
+                            }
+                        }
+                        let None = res.insert((*bid, iid), v) else {
+                            unreachable!()
+                        };
+                    }
+                }
+            }
+        }
+        res
+    }
+
     pub fn from_definition(
         definition: &FunctionDefinition,
         abi: FunctionAbi,
@@ -319,13 +370,21 @@ impl<'a> Gape<'a> {
                     .map(|(x, y)| (x, y.into_iter().collect()))
                     .collect(),
             ),
+            constant_in_instruction_mp: Frozen::freeze(Self::init_constant_in_instruction(
+                &blocks,
+                || -> usize {
+                    let b = a;
+                    a += 1;
+                    b
+                },
+            )),
             blocks,
             reg_mp,
             abi,
-            num_vregs: a,
             function_abi_mp,
             source,
             allocations,
+            num_vregs: a,
         }
     }
 }
@@ -334,7 +393,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn num_insts(&self) -> usize {
         self.blocks
             .values()
-            .map(|b| b.instructions.len() + 1 + 1 + 1) // + 1 : blockexit
+            .map(|b| b.instructions.len() * 2 + 1 + 1 + 1) // + 1 : blockexit
             // +1 : BeforeFirst
             // +1 : AllocateConstBeforeJump
             .fold(0, |a, b| a + b)
@@ -405,9 +464,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
         let yank = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BlockEntry(_) | Yank::Instruction(_, _) | Yank::AllocateConstBeforeJump(_) => {
-                false
-            }
+            Yank::BlockEntry(_)
+            | Yank::BeforeInstruction(_, _)
+            | Yank::Instruction(_, _)
+            | Yank::AllocateConstBeforeJump(_) => false,
             Yank::BlockExit(bid) => match self.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
@@ -418,9 +478,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
         let yank = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BlockEntry(_) | Yank::Instruction(_, _) | Yank::AllocateConstBeforeJump(_) => {
-                false
-            }
+            Yank::BlockEntry(_)
+            | Yank::BeforeInstruction(_, _)
+            | Yank::Instruction(_, _)
+            | Yank::AllocateConstBeforeJump(_) => false,
             Yank::BlockExit(bid) => match self.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
@@ -499,6 +560,299 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 } else {
                     &[]
                 }
+            }
+            Yank::BeforeInstruction(bid, iid) => {
+                match self.constant_in_instruction_mp.get(&(bid, iid)) {
+                    Some(v) => v
+                        .iter()
+                        .map(|vreg| {
+                            regalloc2::Operand::new(
+                                *vreg,
+                                regalloc2::OperandConstraint::Reg,
+                                regalloc2::OperandKind::Def,
+                                regalloc2::OperandPos::Late,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .leak(),
+                    None => {
+                        // Call / Nop
+                        &[]
+                    }
+                }
+            }
+            Yank::Instruction(bid, iid) => {
+                // TODO: totally wrong: match instruction first
+                let block = &self.blocks[&bid];
+                let instruction: &ir::Instruction = &block.instructions[iid];
+                let mut v: Vec<regalloc2::Operand> = Vec::new();
+
+                // 1. add read
+                // 2. add write
+
+                match instruction {
+                    ir::Instruction::Call {
+                        callee,
+                        args,
+                        return_type,
+                    } => {
+                        let FunctionAbi { params_alloc, .. } =
+                            clown(callee, self.function_abi_mp, self.source);
+                        for (operand, alloc) in izip!(args, params_alloc) {
+                            match (alloc, operand) {
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Constant(c),
+                                ) => {}
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Register { rid, dtype },
+                                ) => {
+                                    v.push(regalloc2::Operand::new(
+                                        *self.reg_mp.get_by_left(rid).unwrap(),
+                                        regalloc2::OperandConstraint::FixedReg(target_reg.into()),
+                                        regalloc2::OperandKind::Use,
+                                        regalloc2::OperandPos::Early,
+                                    ));
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Stack { offset_to_s0 },
+                                    )),
+                                    ir::Operand::Constant(..),
+                                ) => {}
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Stack { .. },
+                                    )),
+                                    ir::Operand::Register { .. },
+                                ) => {
+                                    unreachable!("{}", operand.dtype())
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Register { rid, .. },
+                                ) => match self.reg_mp.get_by_left(rid) {
+                                    Some(vreg) => {
+                                        v.push(regalloc2::Operand::new(
+                                            *vreg,
+                                            regalloc2::OperandConstraint::FixedReg(
+                                                target_reg.into(),
+                                            ),
+                                            regalloc2::OperandKind::Use,
+                                            regalloc2::OperandPos::Early,
+                                        ));
+                                    }
+                                    None => {}
+                                },
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                        RegOrStack::Stack {
+                                            offset_to_s0: target_offset,
+                                        },
+                                    )),
+                                    ir::Operand::Register { rid, .. },
+                                ) => match self.reg_mp.get_by_left(rid) {
+                                    Some(vreg) => {
+                                        v.push(regalloc2::Operand::new(
+                                            *vreg,
+                                            regalloc2::OperandConstraint::Reg,
+                                            regalloc2::OperandKind::Use,
+                                            regalloc2::OperandPos::Early,
+                                        ));
+                                    }
+                                    None => todo!(),
+                                },
+                                (
+                                    ParamAlloc::StructInRegister(_),
+                                    ir::Operand::Register {
+                                        rid,
+                                        dtype: ir::Dtype::Struct { .. },
+                                    },
+                                ) => match self.reg_mp.get_by_left(rid) {
+                                    Some(vreg) => {
+                                        v.push(regalloc2::Operand::new(
+                                            *vreg,
+                                            regalloc2::OperandConstraint::Reg,
+                                            regalloc2::OperandKind::Use,
+                                            regalloc2::OperandPos::Early,
+                                        ));
+                                    }
+                                    None => todo!(),
+                                },
+                                _ => unreachable!(),
+                            }
+                        }
+
+                        // deal with operand last
+                        match callee {
+                            Operand::Constant(_) => {}
+                            Operand::Register { rid, dtype } => {
+                                v.push(regalloc2::Operand::new(
+                                    *self.reg_mp.get_by_left(rid).unwrap(),
+                                    regalloc2::OperandConstraint::Any,
+                                    regalloc2::OperandKind::Use,
+                                    regalloc2::OperandPos::Early,
+                                ));
+                            }
+                        }
+                    }
+                    ir::Instruction::BinOp { .. }
+                    | ir::Instruction::UnaryOp { .. }
+                    | ir::Instruction::Store { .. }
+                    | ir::Instruction::Load { .. }
+                    | ir::Instruction::TypeCast { .. }
+                    | ir::Instruction::GetElementPtr { .. } => {
+                        let mut constant_iter = self.constant_in_instruction_mp[&(bid, iid)].iter();
+                        for operand in instruction.walk_operand() {
+                            match operand {
+                                Operand::Constant(Constant::GlobalVariable { .. }) => {
+                                    // skip GlobalVariable
+                                }
+                                Operand::Constant(_) => {
+                                    let vreg = constant_iter.next().unwrap();
+                                    v.push(regalloc2::Operand::new(
+                                        *vreg,
+                                        regalloc2::OperandConstraint::Any,
+                                        regalloc2::OperandKind::Use,
+                                        regalloc2::OperandPos::Early,
+                                    ));
+                                }
+                                Operand::Register {
+                                    rid: RegisterId::Local { .. },
+                                    ..
+                                } => {}
+                                Operand::Register {
+                                    rid,
+                                    dtype:
+                                        Dtype::Int { .. } | Dtype::Float { .. } | Dtype::Pointer { .. },
+                                } => {
+                                    v.push(regalloc2::Operand::new(
+                                        *self.reg_mp.get_by_left(&rid).unwrap(),
+                                        regalloc2::OperandConstraint::Any,
+                                        regalloc2::OperandKind::Use,
+                                        regalloc2::OperandPos::Early,
+                                    ));
+                                }
+                                Operand::Register {
+                                    rid: RegisterId::Temp { .. },
+                                    dtype: Dtype::Struct { .. },
+                                } => {
+                                    // always on stack
+                                }
+                                Operand::Register {
+                                    rid: rid @ RegisterId::Arg { bid, aid },
+                                    dtype: Dtype::Struct { .. },
+                                } => {
+                                    if *bid == self.bid_init {
+                                        // check in abi
+                                        match self.abi.params_alloc[*aid] {
+                                            ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::Direct(_),
+                                            ) => unreachable!(),
+                                            ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
+                                            ) => v.push(regalloc2::Operand::new(
+                                                *self.reg_mp.get_by_left(rid).unwrap(),
+                                                regalloc2::OperandConstraint::Any,
+                                                regalloc2::OperandKind::Use,
+                                                regalloc2::OperandPos::Early,
+                                            )),
+                                            ParamAlloc::PrimitiveType(
+                                                DirectOrInDirect::InDirect(RegOrStack::Stack {
+                                                    ..
+                                                }),
+                                            ) => {}
+                                            ParamAlloc::StructInRegister(_) => {
+                                                // always on stack
+                                            }
+                                        }
+                                    } else {
+                                        unreachable!()
+                                    }
+                                }
+                                Operand::Register { .. } => {
+                                    unreachable!()
+                                }
+                            }
+                        }
+                    }
+                    ir::Instruction::Nop => {}
+                }
+
+                let rid = RegisterId::Temp { bid, iid };
+                match instruction {
+                    ir::Instruction::Call {
+                        callee,
+                        args,
+                        return_type: Dtype::Int { .. } | Dtype::Pointer { .. },
+                    } => match self.reg_mp.get_by_left(&rid) {
+                        Some(dest) => v.push(regalloc2::Operand::new(
+                            *dest,
+                            regalloc2::OperandConstraint::FixedReg(Register::A0.into()),
+                            regalloc2::OperandKind::Def,
+                            regalloc2::OperandPos::Late,
+                        )),
+                        None => {
+                            unreachable!("{rid}")
+                        }
+                    },
+                    ir::Instruction::Call {
+                        callee,
+                        args,
+                        return_type: Dtype::Float { .. },
+                    } => match self.reg_mp.get_by_left(&rid) {
+                        Some(dest) => v.push(regalloc2::Operand::new(
+                            *dest,
+                            regalloc2::OperandConstraint::FixedReg(Register::FA0.into()),
+                            regalloc2::OperandKind::Def,
+                            regalloc2::OperandPos::Late,
+                        )),
+                        None => {
+                            unreachable!("{rid}")
+                        }
+                    },
+                    ir::Instruction::Call {
+                        return_type: Dtype::Struct { .. } | Dtype::Unit { .. },
+                        ..
+                    } => {}
+                    ir::Instruction::Call { .. } => unreachable!("{instruction}"),
+                    ir::Instruction::BinOp { .. }
+                    | ir::Instruction::UnaryOp { .. }
+                    | ir::Instruction::Store { .. }
+                    | ir::Instruction::Load { .. }
+                    | ir::Instruction::TypeCast { .. }
+                    | ir::Instruction::GetElementPtr { .. } => match instruction.dtype() {
+                        Dtype::Unit { .. } => {}
+                        Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Float { .. } => {
+                            match self.reg_mp.get_by_left(&rid) {
+                                Some(dest) => v.push(regalloc2::Operand::new(
+                                    *dest,
+                                    regalloc2::OperandConstraint::Any,
+                                    regalloc2::OperandKind::Def,
+                                    regalloc2::OperandPos::Late,
+                                )),
+                                None => {
+                                    unreachable!("{rid}")
+                                }
+                            }
+                        }
+
+                        Dtype::Struct { .. } => {}
+                        Dtype::Array { .. } => unreachable!(),
+                        Dtype::Function { .. } => unreachable!(),
+                        Dtype::Typedef { .. } => unreachable!(),
+                    },
+                    ir::Instruction::Nop => {}
+                }
+
+                v.leak()
             }
             Yank::AllocateConstBeforeJump(bid) => self.constant_in_jumparg_mp[&bid]
                 .iter()
@@ -589,101 +943,6 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     _ => &[],
                 }
             }
-            Yank::Instruction(bid, iid) => {
-                let block = &self.blocks[&bid];
-                let instruction: &ir::Instruction = &block.instructions[iid];
-                let mut v: Vec<regalloc2::Operand> = Vec::new();
-
-                // 1. add read
-                // 2. add write
-
-                for (rid, dtype) in instruction.walk_register().filter(|(rid, _)| match rid {
-                    RegisterId::Local { .. } => false,
-                    RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
-                }) {
-                    match dtype {
-                        Dtype::Unit { .. } => unreachable!(),
-                        Dtype::Int { .. } | Dtype::Pointer { .. } => {
-                            v.push(regalloc2::Operand::new(
-                                *self.reg_mp.get_by_left(&rid).unwrap(),
-                                regalloc2::OperandConstraint::Any,
-                                regalloc2::OperandKind::Use,
-                                regalloc2::OperandPos::Early,
-                            ))
-                        }
-                        Dtype::Float { .. } => v.push(regalloc2::Operand::new(
-                            *self.reg_mp.get_by_left(&rid).unwrap(),
-                            regalloc2::OperandConstraint::Any,
-                            regalloc2::OperandKind::Use,
-                            regalloc2::OperandPos::Early,
-                        )),
-                        Dtype::Array { .. } => unreachable!(),
-                        Dtype::Struct { .. } => {
-                            match rid {
-                                RegisterId::Local { .. } => unreachable!(),
-                                RegisterId::Arg { bid, aid } => {
-                                    if bid == self.bid_init {
-                                        // check in abi
-                                        match self.abi.params_alloc[aid] {
-                                            super::ParamAlloc::PrimitiveType(
-                                                DirectOrInDirect::Direct(_),
-                                            ) => unreachable!(),
-                                            super::ParamAlloc::PrimitiveType(
-                                                DirectOrInDirect::InDirect(RegOrStack::Reg(reg)),
-                                            ) => v.push(regalloc2::Operand::new(
-                                                *self.reg_mp.get_by_left(&rid).unwrap(),
-                                                regalloc2::OperandConstraint::Any,
-                                                regalloc2::OperandKind::Use,
-                                                regalloc2::OperandPos::Early,
-                                            )),
-                                            super::ParamAlloc::PrimitiveType(
-                                                DirectOrInDirect::InDirect(RegOrStack::Stack {
-                                                    ..
-                                                }),
-                                            ) => {}
-                                            super::ParamAlloc::StructInRegister(_) => {
-                                                // always on stack
-                                            }
-                                        }
-                                    } else {
-                                        unreachable!()
-                                    }
-                                }
-                                RegisterId::Temp { .. } => {
-                                    // always on stack
-                                }
-                            }
-                        }
-                        Dtype::Function { .. } => unreachable!(),
-                        Dtype::Typedef { .. } => unreachable!(),
-                    }
-                }
-
-                let rid = RegisterId::Temp { bid, iid };
-                match instruction.dtype() {
-                    Dtype::Unit { .. } => {}
-                    Dtype::Int { .. } | Dtype::Pointer { .. } | Dtype::Float { .. } => {
-                        match self.reg_mp.get_by_left(&rid) {
-                            Some(dest) => v.push(regalloc2::Operand::new(
-                                *dest,
-                                regalloc2::OperandConstraint::Any,
-                                regalloc2::OperandKind::Def,
-                                regalloc2::OperandPos::Late,
-                            )),
-                            None => {
-                                unreachable!("{rid}")
-                            }
-                        }
-                    }
-
-                    Dtype::Array { .. } => unreachable!(),
-                    Dtype::Struct { .. } => {}
-                    Dtype::Function { .. } => unreachable!(),
-                    Dtype::Typedef { .. } => unreachable!(),
-                }
-
-                v.leak()
-            }
         }
     }
 
@@ -692,7 +951,8 @@ impl<'a> regalloc2::Function for Gape<'a> {
         // let block = &self.blocks[&block_id.into()];
         match yank {
             Yank::Instruction(bid, offset) => {
-                match self.blocks[&bid.into()].instructions[offset].deref() {
+                let instr = self.blocks[&bid.into()].instructions[offset].deref();
+                match instr {
                     ir::Instruction::TypeCast { .. }
                     | ir::Instruction::GetElementPtr { .. }
                     | ir::Instruction::Store { .. }
@@ -700,12 +960,26 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     | ir::Instruction::BinOp { .. }
                     | ir::Instruction::Nop
                     | ir::Instruction::Load { .. } => regalloc2::PRegSet::empty(),
-                    ir::Instruction::Call { .. } => whole_pregset(),
+                    ir::Instruction::Call { .. } => {
+                        let mut x = whole_pregset();
+                        match instr.dtype() {
+                            Dtype::Int { .. } | Dtype::Pointer { .. } => {
+                                x.remove(Register::A0.into());
+                                x
+                            }
+                            Dtype::Float { .. } => {
+                                x.remove(Register::FA0.into());
+                                x
+                            }
+                            _ => x,
+                        }
+                    }
                 }
             }
-            Yank::BlockEntry(_) | Yank::AllocateConstBeforeJump(_) | Yank::BlockExit(_) => {
-                regalloc2::PRegSet::empty()
-            }
+            Yank::BlockEntry(_)
+            | Yank::BeforeInstruction(_, _)
+            | Yank::AllocateConstBeforeJump(_)
+            | Yank::BlockExit(_) => regalloc2::PRegSet::empty(),
         }
     }
 
@@ -777,74 +1051,67 @@ impl<'a> Gape<'a> {
     pub fn edit_2_instruction(
         &self,
         edit: &regalloc2::Edit,
-        register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+        slate: &mut BiMap<RegisterId, regalloc2::Allocation>,
     ) -> Vec<asm::Instruction> {
         match edit {
-            regalloc2::Edit::Move { from, to } => match (from.kind(), to.kind()) {
-                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::None) => todo!(),
-                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Reg) => todo!(),
-                (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Stack) => todo!(),
-                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::None) => todo!(),
-                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Reg) => {
-                    let rs = from.as_reg().unwrap().into();
-                    let rd = to.as_reg().unwrap().into();
+            regalloc2::Edit::Move { from, to } => {
+                if from == to {
+                    return Vec::new();
+                }
+                match (from.kind(), to.kind()) {
+                    (regalloc2::AllocationKind::None, regalloc2::AllocationKind::None) => todo!(),
+                    (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Reg) => todo!(),
+                    (regalloc2::AllocationKind::None, regalloc2::AllocationKind::Stack) => todo!(),
+                    (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::None) => todo!(),
+                    (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Reg) => {
+                        let rs = from.as_reg().unwrap().into();
+                        let rd = to.as_reg().unwrap().into();
 
-                    match rs {
-                        Register::Zero
-                        | Register::Ra
-                        | Register::Sp
-                        | Register::Gp
-                        | Register::Tp => {
-                            unreachable!()
-                        }
-                        Register::Temp(RegisterType::Integer, _)
-                        | Register::Saved(RegisterType::Integer, _)
-                        | Register::Arg(RegisterType::Integer, _) => {
-                            vec![asm::Instruction::Pseudo(Pseudo::Mv { rd, rs })]
-                        }
-                        Register::Temp(RegisterType::FloatingPoint, _)
-                        | Register::Saved(RegisterType::FloatingPoint, _)
-                        | Register::Arg(RegisterType::FloatingPoint, _) => {
-                            for (register_id, v) in register_mp.iter().rev() {
-                                match v {
-                                    DirectOrInDirect::Direct(RegOrStack::Reg(reg))
-                                    | DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
-                                        if *reg == rs {
-                                            let dtype = self.get_dtype(*register_id);
-                                            match &dtype {
-                                                Dtype::Float { .. } => {
-                                                    return vec![asm::Instruction::Pseudo(
-                                                        Pseudo::Fmv {
-                                                            rd,
-                                                            rs,
-                                                            data_size: DataSize::try_from(dtype)
-                                                                .unwrap(),
-                                                        },
-                                                    )];
-                                                }
-                                                _ => unreachable!(),
-                                            }
-                                        }
+                        match rs {
+                            Register::Zero
+                            | Register::Ra
+                            | Register::Sp
+                            | Register::Gp
+                            | Register::Tp => {
+                                unreachable!()
+                            }
+                            Register::Temp(RegisterType::Integer, _)
+                            | Register::Saved(RegisterType::Integer, _)
+                            | Register::Arg(RegisterType::Integer, _) => {
+                                vec![asm::Instruction::Pseudo(Pseudo::Mv { rd, rs })]
+                            }
+                            Register::Temp(RegisterType::FloatingPoint, _)
+                            | Register::Saved(RegisterType::FloatingPoint, _)
+                            | Register::Arg(RegisterType::FloatingPoint, _) => {
+                                let register_id = *slate.get_by_right(from).unwrap();
+                                let dtype = self.get_dtype(register_id);
+                                match &dtype {
+                                    Dtype::Float { .. } => {
+                                        let _ = slate.insert(register_id, *to);
+                                        return vec![asm::Instruction::Pseudo(Pseudo::Fmv {
+                                            rd,
+                                            rs,
+                                            data_size: DataSize::try_from(dtype).unwrap(),
+                                        })];
                                     }
-                                    _ => {}
+                                    _ => unreachable!(),
                                 }
                             }
-                            unreachable!()
                         }
                     }
+                    (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Stack) => todo!(),
+                    (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::None) => todo!(),
+                    (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
+                    (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
                 }
-                (regalloc2::AllocationKind::Reg, regalloc2::AllocationKind::Stack) => todo!(),
-                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::None) => todo!(),
-                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Reg) => todo!(),
-                (regalloc2::AllocationKind::Stack, regalloc2::AllocationKind::Stack) => todo!(),
-            },
+            }
         }
     }
 }
 
 pub fn constant_2_allocation(
     c: Constant,
-    allocation: Allocation,
+    allocation: regalloc2::Allocation,
     res: &mut Vec<asm::Instruction>,
     float_mp: &mut FloatMp,
 ) -> Register {
@@ -869,7 +1136,7 @@ pub fn constant_2_allocation(
     }
 }
 
-pub fn allocation_2_reg(allocation: Allocation, or_register: Register) -> Register {
+pub fn allocation_2_reg(allocation: regalloc2::Allocation, or_register: Register) -> Register {
     match allocation.kind() {
         regalloc2::AllocationKind::None => unreachable!(),
         regalloc2::AllocationKind::Reg => allocation.as_reg().unwrap().into(),

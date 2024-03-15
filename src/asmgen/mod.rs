@@ -13,18 +13,19 @@ use crate::asmgen::helper::constant_2_allocation;
 use crate::ir::{self, BlockId, Declaration, FunctionSignature, HasDtype, RegisterId, Value};
 use crate::opt::deadcode::DeadcodeInner;
 use crate::opt::domtree::DomTree;
-use crate::{Optimize, Translate};
-
-use itertools::izip;
+use crate::{Deadcode, Optimize, Translate};
+use bimap::BiMap;
+use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
+use regalloc2::Function;
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
-
+use petgraph::visit::IntoNodeIdentifiers;
 use regalloc2::MachineEnv;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::iter::once;
 use std::ops::Deref;
 
@@ -123,7 +124,6 @@ impl Translate<ir::TranslationUnit> for Asmgen {
 
             // before gen detailed asm::Instruction
             // we need to allocate register first
-            // alloc_register(definition, abi, &mut register_mp, &mut stack_offset_2_s0);
             let gape = helper::Gape::from_definition(
                 &definition,
                 function_abi_mp.get(func_name).unwrap().clone(),
@@ -252,6 +252,11 @@ fn translate_function(
     source: &ir::TranslationUnit,
     float_mp: &mut FloatMp,
 ) -> asm::Function {
+    let rpo = gape.reverse_post_order();
+    let pred = gape.calculate_pred();
+    let dom = gape.calculate_dominator(&pred);
+    let idom = gape.calculate_idom(&dom, &rpo);
+
     let mut function: asm::Function = asm::Function { blocks: vec![] };
 
     let FunctionAbi { params_alloc, .. } = function_abi_mp.get(func_name).unwrap();
@@ -265,8 +270,7 @@ fn translate_function(
     // backup fs0 fs1 fs2 ...
     stack_offset_2_s0 -= 8 * 12 * 2;
 
-    let mut register_mp: LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>> =
-        LinkedHashMap::new();
+    let mut stack_mp: HashMap<RegisterId, i64> = HashMap::new();
 
     let mut alloc_arg = vec![];
 
@@ -276,49 +280,19 @@ fn translate_function(
             aid,
         };
         match alloc {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
-                // update float in register_mp to help edit_2_instruction
-                match dtype {
-                    ir::Dtype::Float { .. } => {
-                        let _ = register_mp
-                            .insert(register_id, DirectOrInDirect::Direct(RegOrStack::Reg(*reg)));
-                    }
-                    _ => {}
-                }
-            }
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {}
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
-                let None = register_mp.insert(
-                    register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Stack {
-                        offset_to_s0: *offset_to_s0,
-                    }),
-                ) else {
+                let None = stack_mp.insert(register_id, *offset_to_s0) else {
                     unreachable!()
                 };
             }
-            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {
-                /*
-                // regalloc2 deal with this
-                // must be a struct
-                let None = register_mp.insert(
-                    register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::IntRegNotSure { src: Some(*reg) }),
-                ) else {
-                    unreachable!()
-                };
-                 */
-            }
+            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))) => {}
             ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
-                let None = register_mp.insert(
-                    register_id,
-                    DirectOrInDirect::InDirect(RegOrStack::Stack {
-                        offset_to_s0: *offset_to_s0,
-                    }),
-                ) else {
+                let None = stack_mp.insert(register_id, *offset_to_s0) else {
                     unreachable!()
                 };
             }
@@ -391,12 +365,7 @@ fn translate_function(
                         RegisterCouple::MergedToPrevious => {}
                     }
                 }
-                let None = register_mp.insert(
-                    register_id,
-                    DirectOrInDirect::Direct(RegOrStack::Stack {
-                        offset_to_s0: stack_offset_2_s0,
-                    }),
-                ) else {
+                let None = stack_mp.insert(register_id, stack_offset_2_s0) else {
                     unreachable!()
                 };
             }
@@ -429,12 +398,7 @@ fn translate_function(
             Register::T0,
             stack_offset_2_s0 as u64,
         ));
-        let None = register_mp.insert(
-            RegisterId::Local { aid },
-            DirectOrInDirect::Direct(RegOrStack::Stack {
-                offset_to_s0: stack_offset_2_s0,
-            }),
-        ) else {
+        let None = stack_mp.insert(RegisterId::Local { aid }, stack_offset_2_s0) else {
             unreachable!()
         };
     }
@@ -444,8 +408,7 @@ fn translate_function(
             let dtype = instr.dtype();
             match &dtype {
                 ir::Dtype::Unit { .. } => {}
-                ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {}
-                ir::Dtype::Float { .. } => {}
+                ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } | ir::Dtype::Float { .. } => {}
                 ir::Dtype::Array { .. } => unreachable!(),
                 ir::Dtype::Struct { .. } => {
                     let (size, align) = dtype.size_align_of(&source.structs).unwrap();
@@ -454,12 +417,8 @@ fn translate_function(
                         stack_offset_2_s0 -= 1;
                     }
                     stack_offset_2_s0 -= size.max(4) as i64;
-                    let None = register_mp.insert(
-                        RegisterId::Temp { bid, iid },
-                        DirectOrInDirect::Direct(RegOrStack::Stack {
-                            offset_to_s0: stack_offset_2_s0,
-                        }),
-                    ) else {
+                    let None = stack_mp.insert(RegisterId::Temp { bid, iid }, stack_offset_2_s0)
+                    else {
                         unreachable!()
                     };
                 }
@@ -469,98 +428,6 @@ fn translate_function(
         }
     }
 
-    /*
-    for i in 0..gape.inst_mp.len() {
-        let insn: regalloc2::Inst = regalloc2::Inst::new(i);
-        let allocations = output
-            .inst_allocs(insn)
-            .iter()
-            .map(|x| x.as_reg().unwrap())
-            .map(|x| x.into())
-            .collect::<Vec<Register>>();
-        let (bid, yank) = gape.inst_mp.get_by_right(&insn).unwrap();
-        let block = &definition.blocks[bid];
-        match yank {
-            helper::Yank::BeforeFirst => {
-                println!("beforefirst {bid} {:?}", allocations);
-            }
-            helper::Yank::Instruction(offset) => {
-                println!("{} {:?}", block.instructions[*offset], allocations);
-            }
-            helper::Yank::BlockExit => {
-                println!("{} {:?}", block.exit, allocations);
-            }
-        }
-    }
-
-    dbg!(gape.reg_mp.len());
-    dbg!(&output);
-     */
-
-    /*
-        // deal with edit in Output
-        let mut register_remap: Vec<(Register, Register, ir::Dtype)> = vec![];
-        for (aid, (alloc, dtype)) in izip!(params, &signature.params).enumerate() {
-            let register_id = RegisterId::Arg {
-                bid: definition.bid_init,
-                aid,
-            };
-            match (alloc, register_mp.get(&register_id).unwrap()) {
-                (
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))),
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                ) => {
-                    alloc_arg.extend(mk_stype(
-                        SType::store(dtype.clone()),
-                        Register::S0,
-                        *reg,
-                        *offset_to_s0 as u64,
-                    ));
-                }
-                (
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(_))),
-                    DirectOrInDirect::InDirect(RegOrStack::Stack { .. }),
-                ) => {
-                    unreachable!()
-                }
-                (
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(reg))),
-                    DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }),
-                ) => {
-                    alloc_arg.extend(mk_stype(
-                        SType::SD,
-                        Register::S0,
-                        *reg,
-                        *offset_to_s0 as u64,
-                    ));
-                }
-                (
-                    // register to stack
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(_))),
-                    DirectOrInDirect::Direct(RegOrStack::Stack { .. }),
-                ) => {
-                    unreachable!()
-                }
-
-                (
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(origin_reg))),
-                    DirectOrInDirect::Direct(RegOrStack::Reg(target_reg)),
-                )
-                | (
-                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(origin_reg))),
-                    DirectOrInDirect::InDirect(RegOrStack::Reg(target_reg)),
-                ) => {
-                    if target_reg != origin_reg {
-                        register_remap.push((*origin_reg, *target_reg, dtype.clone()));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        alloc_arg.extend(cp_parallel(register_remap));
-    */
-
     // the stack pointer is always kept 16-byte aligned
     while stack_offset_2_s0 % 16 != 0 {
         stack_offset_2_s0 -= 1;
@@ -568,13 +435,22 @@ fn translate_function(
     let stack_offset_2_s0 = stack_offset_2_s0;
 
     let mut temp_block: Vec<asm::Block> = vec![];
+    let mut methane: HashMap<BlockId, BiMap<RegisterId, regalloc2::Allocation>> = HashMap::new();
 
     for bid in gape.reverse_post_order() {
+        let mut slate = if bid == gape.bid_init {
+            BiMap::new()
+        } else {
+            let idom: BlockId = idom[&bid];
+            methane[&idom].clone()
+        };
+
         let instructions = translate_block(
             func_name,
             bid,
             &mut temp_block,
-            &mut register_mp,
+            &stack_mp,
+            &mut slate,
             source,
             function_abi_mp,
             float_mp,
@@ -585,6 +461,10 @@ fn translate_function(
             label: Some(Label::new(func_name, bid)),
             instructions,
         });
+
+        let None = methane.insert(bid, slate) else {
+            unreachable!()
+        };
     }
 
     function.blocks.extend(temp_block);
@@ -720,7 +600,8 @@ fn translate_block(
     func_name: &str,
     bid: BlockId,
     temp_block: &mut Vec<asm::Block>,
-    register_mp: &mut LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
+    stack_mp: &HashMap<RegisterId, i64>,
+    slate: &mut BiMap<RegisterId, regalloc2::Allocation>,
     source: &ir::TranslationUnit,
     function_abi_mp: &HashMap<String, FunctionAbi>,
     float_mp: &mut FloatMp,
@@ -730,161 +611,11 @@ fn translate_block(
     let block = &gape.blocks[&bid];
     let mut res = vec![];
 
-    let insn = *gape.inst_mp.get_by_left(&Yank::BlockEntry(bid)).unwrap();
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::before(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::after(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
-
-    'instr_loop: for (iid, instr) in block.instructions.iter().enumerate() {
-        let rid = RegisterId::Temp { bid, iid };
-        let insn = *gape
-            .inst_mp
-            .get_by_left(&Yank::Instruction(bid, iid))
-            .unwrap();
-
-        // .next().is_none() means this instruction is striped in helper.rs
-        let mut allocations = output
-            .inst_allocs(
-                *gape
-                    .inst_mp
-                    .get_by_left(&(Yank::Instruction(bid, iid)))
-                    .unwrap(),
-            )
-            .iter()
-            .map(|x| x.as_reg().unwrap())
-            .map(<regalloc2::PReg as Into<Register>>::into);
-
-        // update register_mp
-        // 1. update read
-        // 2. update write
-        for (rid, dtype) in instr.walk_register().filter(|(rid, _)| match rid {
-            RegisterId::Local { .. } => false,
-            RegisterId::Arg { .. } | RegisterId::Temp { .. } => true,
-        }) {
-            match dtype {
-                ir::Dtype::Unit { .. } => {}
-                ir::Dtype::Int { .. } | ir::Dtype::Float { .. } | ir::Dtype::Pointer { .. } => {
-                    let reg = match allocations.next() {
-                        Some(reg) => reg,
-                        None => unreachable!(),
-                    };
-                    let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
-                }
-                ir::Dtype::Array { .. } => unreachable!(),
-                ir::Dtype::Struct { .. } => match rid {
-                    RegisterId::Local { .. } => unreachable!(),
-                    RegisterId::Arg { bid, aid } => {
-                        if bid == gape.bid_init {
-                            match &gape.abi.params_alloc[aid] {
-                                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
-                                    RegOrStack::Reg(_),
-                                )) => unreachable!(),
-                                ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
-                                    RegOrStack::Reg(_),
-                                )) => {
-                                    let _ = register_mp.insert(
-                                        rid,
-                                        DirectOrInDirect::InDirect(RegOrStack::Reg(
-                                            allocations.next().unwrap(),
-                                        )),
-                                    );
-                                }
-                                ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
-                                    RegOrStack::Stack { .. },
-                                ))
-                                | ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
-                                    RegOrStack::Stack { .. },
-                                )) => {
-                                    // do nothing
-                                }
-                                ParamAlloc::StructInRegister(_) => {
-                                    // on stack
-                                    // do nothing
-                                }
-                            }
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    RegisterId::Temp { .. } => {
-                        // temp struct are always on stack
-                    }
-                },
-                ir::Dtype::Function { .. } => unreachable!(),
-                ir::Dtype::Typedef { .. } => unreachable!(),
-            }
-        }
-
-        match &**instr {
-            ir::Instruction::Nop | ir::Instruction::Store { .. } => {}
-            ir::Instruction::Call { .. } => match allocations.next() {
-                Some(reg) => {
-                    let _ = register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
-                }
-                None => {
-                    match instr.dtype() {
-                        ir::Dtype::Unit { .. } => {}
-                        ir::Dtype::Int { .. }
-                        | ir::Dtype::Pointer { .. }
-                        | ir::Dtype::Float { .. } => {
-                            unreachable!()
-                        }
-                        ir::Dtype::Struct { .. } => {
-                            // doesn't matter
-                        }
-                        ir::Dtype::Array { .. }
-                        | ir::Dtype::Function { .. }
-                        | ir::Dtype::Typedef { .. } => unreachable!(),
-                    }
-                }
-            },
-            ir::Instruction::BinOp { .. }
-            | ir::Instruction::UnaryOp { .. }
-            | ir::Instruction::Load { .. }
-            | ir::Instruction::TypeCast { .. }
-            | ir::Instruction::GetElementPtr { .. } => {
-                match instr.dtype() {
-                    ir::Dtype::Unit { .. } => {}
-                    ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Float { .. } => {
-                        let reg = match allocations.next() {
-                            Some(reg) => reg,
-                            None => continue 'instr_loop,
-                        };
-                        let _ =
-                            register_mp.insert(rid, DirectOrInDirect::Direct(RegOrStack::Reg(reg)));
-                    }
-                    ir::Dtype::Struct { .. } => {
-                        // temp struct are always on stack
-                    }
-                    ir::Dtype::Array { .. }
-                    | ir::Dtype::Function { .. }
-                    | ir::Dtype::Typedef { .. } => unreachable!(),
-                }
-            }
-        }
+    for insn in gape
+        .block_insns(*gape.block_mp.get_by_left(&bid).unwrap())
+        .iter()
+    {
+        let yank = gape.inst_mp.get_by_right(&insn).unwrap();
 
         res.extend(
             output
@@ -897,3001 +628,1580 @@ fn translate_block(
                         None
                     }
                 })
-                .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+                .flat_map(|x| gape.edit_2_instruction(x, slate)),
         );
 
-        match &**instr {
-            ir::Instruction::UnaryOp {
-                op,
-                operand: ir::Operand::Constant(c),
-                dtype,
-            } => {
-                let v = crate::ir::interp::calculator::calculate_unary_operator_expression(
-                    op,
-                    Value::try_from(c.clone()).unwrap(),
-                )
-                .unwrap();
-                let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                match v {
-                    Value::Int { value, .. } => {
-                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                res.extend(mk_itype(
-                                    IType::Addi(data_size),
-                                    *dest_reg,
-                                    Register::Zero,
-                                    value as u64 & data_size.mask(),
-                                ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                                res.extend(mk_itype(
-                                    IType::Addi(data_size),
-                                    Register::T0,
-                                    Register::Zero,
-                                    value as u64 & data_size.mask(),
-                                ));
-                                res.extend(mk_stype(
-                                    SType::store(dtype.clone()),
-                                    Register::S0,
-                                    Register::T0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(_) => unreachable!(),
+        match yank {
+            Yank::BlockEntry(_) => {}
+            Yank::BeforeInstruction(_, iid) => {
+                let iid = *iid;
+                let instr = &block.instructions[iid];
+                match &**instr {
+                    ir::Instruction::Nop | ir::Instruction::Call { .. } => {}
+                    ir::Instruction::BinOp { .. }
+                    | ir::Instruction::UnaryOp { .. }
+                    | ir::Instruction::Store { .. }
+                    | ir::Instruction::Load { .. }
+                    | ir::Instruction::TypeCast { .. }
+                    | ir::Instruction::GetElementPtr { .. } => {
+                        let mut allocations = output.inst_allocs(insn).iter();
+                        for c in instr.walk_constant().filter(|c| match c {
+                            ir::Constant::Int { .. } | ir::Constant::Float { .. } => true,
+                            ir::Constant::GlobalVariable { .. } => false,
+                            ir::Constant::Undef { .. } | ir::Constant::Unit => unreachable!(),
+                        }) {
+                            let allocation = allocations.next().unwrap();
+                            let rd: Register = allocation.as_reg().unwrap().into();
+                            load_constant_to_reg(c.clone(), rd, &mut res, float_mp);
                         }
                     }
-                    Value::Float { value, width } => {
-                        let label = float_mp.get_label(Float { value, width });
-                        res.push(asm::Instruction::Pseudo(Pseudo::La {
-                            rd: Register::T0,
-                            symbol: label,
-                        }));
-                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::load(dtype.clone()),
-                                    rd: *dest_reg,
-                                    rs1: Register::T0,
-                                    imm: Immediate::Value(0),
+                }
+            }
+            Yank::Instruction(_, iid) => {
+                let iid = *iid;
+                let instr = &block.instructions[iid];
+                let mut allocations = output.inst_allocs(insn).iter();
+                match &**instr {
+                    ir::Instruction::UnaryOp {
+                        op: UnaryOperator::Minus,
+                        operand,
+                        dtype: dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let reg: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: RType::sub(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1: Register::Zero,
+                                    rs2: Some(reg),
                                 });
                             }
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::load(dtype.clone()),
-                                    rd: Register::FT0,
-                                    rs1: Register::T0,
-                                    imm: Immediate::Value(0),
-                                });
-                                res.extend(mk_stype(
-                                    SType::store(dtype.clone()),
-                                    Register::S0,
-                                    Register::FT0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(_) => unreachable!(),
+                            None => todo!(),
                         }
                     }
-                    _ => unreachable!(),
-                }
-            }
-            ir::Instruction::UnaryOp {
-                op: UnaryOperator::Minus,
-                operand: operand @ ir::Operand::Register { .. },
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let reg = load_operand_to_reg(
-                    operand.clone(),
-                    Register::T0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: RType::sub(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1: Register::Zero,
-                            rs2: Some(reg),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: RType::sub(dtype.clone()),
-                            rd: Register::T1,
-                            rs1: Register::Zero,
-                            rs2: Some(reg),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T1,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::UnaryOp {
-                op: UnaryOperator::Minus,
-                operand: operand @ ir::Operand::Register { .. },
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let reg = load_operand_to_reg(
-                    operand.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::fneg(
-                            dtype.clone(),
-                            *dest_reg,
-                            reg,
-                        )));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::fneg(
-                            dtype.clone(),
-                            Register::FT1,
-                            reg,
-                        )));
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT1,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::UnaryOp {
-                op: UnaryOperator::Negate,
-                operand: operand @ ir::Operand::Register { .. },
-                dtype: ir::Dtype::Int { .. },
-            } => {
-                let rs = load_operand_to_reg(
-                    operand.clone(),
-                    Register::T0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz { rd: *dest_reg, rs }));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
-                            rd: Register::T0,
-                            rs,
-                        }));
-                        res.extend(mk_stype(
-                            SType::SW,
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op,
-                lhs: ir::Operand::Constant(c1),
-                rhs: ir::Operand::Constant(c2),
-                dtype,
-            } => {
-                let v = crate::ir::interp::calculator::calculate_binary_operator_expression(
-                    op,
-                    Value::try_from(c1.clone()).unwrap(),
-                    Value::try_from(c2.clone()).unwrap(),
-                )
-                .unwrap();
-                match (v, register_mp.get(&RegisterId::Temp { bid, iid }).unwrap()) {
-                    (
-                        Value::Int { value, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            *dest_reg,
-                            Register::Zero,
-                            value as u64 & data_size.mask(),
-                        ));
-                    }
-                    (
-                        Value::Int { value, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            Register::T0,
-                            Register::Zero,
-                            value as u64 & data_size.mask(),
-                        ));
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs: x,
-                rhs: ir::Operand::Constant(ir::Constant::Int { value: 0, .. }),
-                dtype: dtype @ ir::Dtype::Int { .. },
-            }
-            | ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs: ir::Operand::Constant(ir::Constant::Int { value: 0, .. }),
-                rhs: x,
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs =
-                    load_operand_to_reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd: *dest_reg, rs }));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            rs,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs: x,
-                rhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
-                dtype: dtype @ ir::Dtype::Int { .. },
-            }
-            | ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
-                rhs: x,
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let reg =
-                    load_operand_to_reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            *dest_reg,
-                            reg,
-                            *value as u64 & data_size.mask(),
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            Register::T0,
-                            reg,
-                            *value as u64 & data_size.mask(),
-                        ));
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::add(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::add(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Plus,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let rs1 = load_operand_to_reg(
-                    lhs.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let reg2 = load_operand_to_reg(
-                    rhs.clone(),
-                    Register::FT1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fadd(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fadd(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Minus,
-                lhs,
-                rhs: ir::Operand::Constant(c),
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let value: u64 = match c {
-                    ir::Constant::Int {
-                        value,
-                        is_signed: true,
-                        ..
+                    ir::Instruction::UnaryOp {
+                        op: UnaryOperator::Minus,
+                        operand,
+                        dtype: dtype @ ir::Dtype::Float { .. },
                     } => {
-                        let value: i128 = *value as i128;
-                        let value: i128 = -value;
-                        let value: i64 = value.try_into().unwrap();
-                        value as u64
+                        let reg: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::fneg(
+                                    dtype.clone(),
+                                    dest_reg.into(),
+                                    reg,
+                                )));
+                            }
+                            None => todo!(),
+                        }
                     }
-                    ir::Constant::Int {
-                        value,
-                        is_signed: false,
-                        ..
-                    } => {
-                        let value: i128 = (*value).try_into().unwrap();
-                        let value: i128 = -value;
-                        let value: i64 = value.try_into().unwrap();
-                        value as u64
-                    }
-                    _ => unreachable!(),
-                };
-                let reg1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
 
-                let data_size = DataSize::try_from(dtype.clone()).unwrap();
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            *dest_reg,
-                            reg1,
-                            value & data_size.mask(),
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            Register::T0,
-                            reg1,
-                            value & data_size.mask(),
-                        ));
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Minus,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sub(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sub(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Minus,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let rs1 = load_operand_to_reg(
-                    lhs.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let reg2 = load_operand_to_reg(
-                    rhs.clone(),
-                    Register::FT1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fsub(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fsub(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Multiply,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::mul(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::mul(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Multiply,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let rs1 = load_operand_to_reg(
-                    lhs.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let reg2 = load_operand_to_reg(
-                    rhs.clone(),
-                    Register::FT1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fmul(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fmul(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Divide,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Int { is_signed, .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::div(dtype.clone(), *is_signed),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::div(dtype.clone(), *is_signed),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Divide,
-                lhs,
-                rhs,
-                dtype: dtype @ ir::Dtype::Float { .. },
-            } => {
-                let rs1 = load_operand_to_reg(
-                    lhs.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let reg2 = load_operand_to_reg(
-                    rhs.clone(),
-                    Register::FT1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fdiv(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::fdiv(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Equals,
-                lhs: x,
-                rhs:
-                    ir::Operand::Constant(
-                        c @ ir::Constant::Int {
-                            is_signed: true, ..
-                        },
-                    ),
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            }
-            | ir::Instruction::BinOp {
-                op: BinaryOperator::Equals,
-                rhs: x,
-                lhs:
-                    ir::Operand::Constant(
-                        c @ ir::Constant::Int {
-                            is_signed: true, ..
-                        },
-                    ),
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let c = c.clone().minus();
-                let ir::Constant::Int { value, .. } = c else {
-                    unreachable!()
-                };
-                let reg1 =
-                    load_operand_to_reg(x.clone(), Register::T0, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        let data_size = DataSize::try_from(x.dtype()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            *dest_reg,
-                            reg1,
-                            value as u64 & data_size.mask(),
-                        ));
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
-                            rd: *dest_reg,
-                            rs: *dest_reg,
-                        }));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        let data_size = DataSize::try_from(x.dtype()).unwrap();
-                        res.extend(mk_itype(
-                            IType::Addi(data_size),
-                            Register::T0,
-                            reg1,
-                            value as u64 & data_size.mask(),
-                        ));
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
-                            rd: Register::T0,
-                            rs: Register::T0,
-                        }));
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Equals,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
-                            rd: *dest_reg,
-                            rs: *dest_reg,
-                        }));
-                    }
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
-                            rd: Register::T0,
-                            rs: Register::T0,
-                        }));
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::NotEquals,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::Pseudo(Pseudo::Snez {
-                            rd: Register::T0,
-                            rs: Register::T0,
-                        }));
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::Pseudo(Pseudo::Snez {
-                            rd: *dest_reg,
-                            rs: *dest_reg,
-                        }));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Less,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::LessOrEqual,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: *dest_reg,
-                            rs1: *dest_reg,
-                            imm: Immediate::Value(1),
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: Register::T0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(1),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: *dest_reg,
-                            rs1: *dest_reg,
-                            imm: Immediate::Value(1),
-                        });
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: Register::T0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(1),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Greater,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let reg0 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let rs1 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::FT1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::flt(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg0),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::GreaterOrEqual,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: *dest_reg,
-                            rs1: *dest_reg,
-                            imm: Immediate::Value(1),
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Slt {
-                                is_signed: *is_signed,
-                            },
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.push(asm::Instruction::IType {
-                            instr: IType::Xori,
-                            rd: Register::T0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(1),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::Modulo,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let dtype = lhs.dtype();
-                match (
-                    &dtype,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::rem(dtype.clone(), *is_signed),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { is_signed, .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            lhs.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        let reg2 = load_operand_to_reg(
-                            rhs.clone(),
-                            Register::T1,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::rem(dtype.clone(), *is_signed),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::ShiftLeft,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sll(target_dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sll(target_dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            // all shr is i32
-            ir::Instruction::BinOp {
-                op: BinaryOperator::ShiftRight,
-                lhs,
-                rhs: ir::Operand::Constant(ir::Constant::Int { value, .. }),
-                dtype:
-                    target_dtype @ ir::Dtype::Int {
-                        width: 32,
-                        is_signed: true,
-                        ..
-                    },
-            } => {
-                let reg0 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-
-                let instr = match lhs.dtype() {
-                    ir::Dtype::Int {
-                        width: 32,
-                        is_signed: true,
-                        ..
-                    } => IType::Srai(DataSize::Double),
-                    ir::Dtype::Int {
-                        width: 32,
-                        is_signed: false,
-                        ..
-                    } => IType::Srli(DataSize::Word),
-                    _ => unreachable!(),
-                };
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::IType {
-                            instr,
-                            rd: *dest_reg,
-                            rs1: reg0,
-                            imm: Immediate::Value(*value as u64),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::IType {
-                            instr,
-                            rd: Register::T0,
-                            rs1: reg0,
-                            imm: Immediate::Value(*value as u64),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::BinOp {
-                op: BinaryOperator::ShiftRight,
-                rhs: ir::Operand::Constant(ir::Constant::Int { .. }),
-                dtype: ir::Dtype::Int { .. },
-                ..
-            } => {
-                unreachable!()
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::ShiftRight,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sra(target_dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::sra(target_dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::BitwiseXor,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Xor,
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::BitwiseAnd,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::And,
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::And,
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::BinOp {
-                op: BinaryOperator::BitwiseOr,
-                lhs,
-                rhs,
-                dtype: target_dtype @ ir::Dtype::Int { .. },
-            } => {
-                let rs1 =
-                    load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg2 =
-                    load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Or,
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: asm::RType::Or,
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(reg2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(target_dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-
-            ir::Instruction::Store {
-                ptr:
-                    ptr @ ir::Operand::Register {
-                        dtype: ir::Dtype::Pointer { inner, .. },
-                        ..
-                    },
-                value: operand @ ir::Operand::Constant(ir::Constant::Int { .. }),
-            } => {
-                let rs2 = load_operand_to_reg(
-                    operand.clone(),
-                    Register::T1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let rs1 =
-                    load_operand_to_reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
-                res.push(asm::Instruction::SType {
-                    instr: SType::store((**inner).clone()),
-                    rs1,
-                    rs2,
-                    imm: Immediate::Value(0),
-                });
-            }
-            ir::Instruction::Store {
-                ptr:
-                    ptr @ ir::Operand::Register {
-                        dtype: ir::Dtype::Pointer { inner, .. },
-                        ..
-                    },
-                value: operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
-            } => {
-                let rs2 = load_operand_to_reg(
-                    operand.clone(),
-                    Register::FT0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                let rs1 =
-                    load_operand_to_reg(ptr.clone(), Register::T0, &mut res, register_mp, float_mp);
-                res.push(asm::Instruction::SType {
-                    instr: SType::store((**inner).clone()),
-                    rs1,
-                    rs2,
-                    imm: Immediate::Value(0),
-                });
-            }
-            ir::Instruction::Store {
-                ptr:
-                    ir::Operand::Register {
-                        dtype: ir::Dtype::Pointer { .. },
-                        ..
-                    },
-                value: ir::Operand::Constant(ir::Constant::GlobalVariable { .. }),
-            } => {
-                todo!()
-            }
-            ir::Instruction::Store {
-                ptr:
-                    ir::Operand::Register {
-                        rid: ptr_rid,
-                        dtype: ir::Dtype::Pointer { .. },
-                    },
-                value:
-                    ir::Operand::Register {
-                        rid: value_rid,
+                    ir::Instruction::UnaryOp {
+                        op: UnaryOperator::Negate,
+                        operand,
                         dtype,
-                    },
-            } => {
-                let DirectOrInDirect::Direct(reg_or_stack) = register_mp.get(ptr_rid).unwrap()
-                else {
-                    unreachable!()
-                };
-                let dest_location = match reg_or_stack {
-                    RegOrStack::Reg(reg) => *reg,
-                    RegOrStack::Stack { offset_to_s0 } => {
-                        res.extend(mk_itype(
-                            IType::LD,
-                            Register::T3,
-                            Register::S0,
-                            *offset_to_s0 as u64,
-                        ));
-                        Register::T3
+                    } => {
+                        let rs: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
+                                    rd: dest_reg.into(),
+                                    rs,
+                                }));
+                            }
+                            None => todo!(),
+                        }
                     }
-                };
-                match register_mp.get(value_rid).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: src }) => {
-                        cp_to_indirect_target(
-                            (Register::S0, *src),
-                            dest_location,
-                            0,
-                            dtype.clone(),
-                            &mut res,
-                            source,
-                        );
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Plus,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::add(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
                     }
-                    DirectOrInDirect::Direct(RegOrStack::Reg(value_reg)) => {
-                        // store reg to location
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            dest_location,
-                            *value_reg,
-                            0,
-                        ));
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Plus,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Float { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::fadd(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
                     }
-                    DirectOrInDirect::InDirect(src) => {
-                        let source_location = match src {
-                            RegOrStack::Reg(reg) => *reg,
-                            RegOrStack::Stack { offset_to_s0 } => {
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Minus,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::sub(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Minus,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Float { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::fsub(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Multiply,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::mul(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Multiply,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Float { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::fmul(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Divide,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Int { is_signed, .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::div(dtype.clone(), *is_signed),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Divide,
+                        lhs,
+                        rhs,
+                        dtype: dtype @ ir::Dtype::Float { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::fdiv(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Equals,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        assert!(matches!(lhs.dtype(), ir::Dtype::Int { .. }));
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                let rd = dest_reg.into();
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::Xor,
+                                    rd,
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                                res.push(asm::Instruction::Pseudo(Pseudo::Seqz { rd, rs: rd }));
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::NotEquals,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        assert!(matches!(lhs.dtype(), ir::Dtype::Int { .. }));
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                let rd = dest_reg.into();
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::Xor,
+                                    rd,
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                                res.push(asm::Instruction::Pseudo(Pseudo::Snez { rd, rs: rd }));
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Less,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match lhs.dtype() {
+                            ir::Dtype::Int {
+                                width,
+                                is_signed,
+                                is_const,
+                            } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::Slt {
+                                            is_signed: is_signed,
+                                        },
+                                        rd: dest_reg.into(),
+                                        rs1,
+                                        rs2: Some(rs2),
+                                    });
+                                }
+                                None => todo!(),
+                            },
+                            ir::Dtype::Float { width, is_const } => {
+                                match allocations.next().unwrap().as_reg() {
+                                    Some(dest_reg) => {
+                                        res.push(asm::Instruction::RType {
+                                            instr: asm::RType::flt(lhs.dtype()),
+                                            rd: dest_reg.into(),
+                                            rs1,
+                                            rs2: Some(rs2),
+                                        });
+                                    }
+                                    None => todo!(),
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::LessOrEqual,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs0: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match lhs.dtype() {
+                            ir::Dtype::Int {
+                                width,
+                                is_signed,
+                                is_const,
+                            } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    let rd = dest_reg.into();
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::Slt { is_signed },
+                                        rd,
+                                        rs1,
+                                        rs2: Some(rs0),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Xori,
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(1),
+                                    });
+                                }
+                                None => todo!(),
+                            },
+                            ir::Dtype::Float { width, is_const } => {
+                                match allocations.next().unwrap().as_reg() {
+                                    Some(dest_reg) => {
+                                        let rd = dest_reg.into();
+
+                                        res.push(asm::Instruction::RType {
+                                            instr: asm::RType::flt(lhs.dtype()),
+                                            rd,
+                                            rs1,
+                                            rs2: Some(rs0),
+                                        });
+                                        res.push(asm::Instruction::IType {
+                                            instr: IType::Xori,
+                                            rd,
+                                            rs1: rd,
+                                            imm: Immediate::Value(1),
+                                        });
+                                    }
+                                    None => todo!(),
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Greater,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs0: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match lhs.dtype() {
+                            ir::Dtype::Int {
+                                width,
+                                is_signed,
+                                is_const,
+                            } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::Slt { is_signed },
+                                        rd: dest_reg.into(),
+                                        rs1,
+                                        rs2: Some(rs0),
+                                    });
+                                }
+                                None => todo!(),
+                            },
+                            ir::Dtype::Float { width, is_const } => {
+                                match allocations.next().unwrap().as_reg() {
+                                    Some(dest_reg) => {
+                                        res.push(asm::Instruction::RType {
+                                            instr: asm::RType::flt(lhs.dtype()),
+                                            rd: dest_reg.into(),
+                                            rs1,
+                                            rs2: Some(rs0),
+                                        });
+                                    }
+                                    None => todo!(),
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::GreaterOrEqual,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match lhs.dtype() {
+                            ir::Dtype::Int {
+                                width,
+                                is_signed,
+                                is_const,
+                            } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    let rd = dest_reg.into();
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::Slt { is_signed },
+                                        rd,
+                                        rs1,
+                                        rs2: Some(rs2),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Xori,
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(1),
+                                    });
+                                }
+                                None => todo!(),
+                            },
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Modulo,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        assert!(matches!(lhs.dtype(), ir::Dtype::Int { .. }));
+
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match lhs.dtype() {
+                            ir::Dtype::Int {
+                                width,
+                                is_signed,
+                                is_const,
+                            } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::rem(lhs.dtype(), is_signed),
+                                        rd: dest_reg.into(),
+                                        rs1,
+                                        rs2: Some(rs2),
+                                    });
+                                }
+                                None => todo!(),
+                            },
+                            _ => unreachable!(),
+                        }
+                        todo!()
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::ShiftLeft,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::sll(target_dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::ShiftRight,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::sra(target_dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::BitwiseXor,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::Xor,
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::BitwiseAnd,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::And,
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::BitwiseOr,
+                        lhs,
+                        rhs,
+                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: asm::RType::Or,
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::Store {
+                        ptr:
+                            ir::Operand::Constant(ir::Constant::GlobalVariable {
+                                name,
+                                dtype: dtype @ ir::Dtype::Int { .. },
+                            }),
+                        value,
+                    } => {
+                        res.push(asm::Instruction::Pseudo(Pseudo::La {
+                            rd: Register::T1,
+                            symbol: Label(name.clone()),
+                        }));
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        res.push(asm::Instruction::SType {
+                            instr: SType::store(dtype.clone()),
+                            rs1: Register::T1,
+                            rs2,
+                            imm: Immediate::Value(0),
+                        });
+                    }
+
+                    ir::Instruction::Store {
+                        ptr:
+                            ir::Operand::Register {
+                                rid: ptr_rid,
+                                dtype: ir::Dtype::Pointer { .. },
+                            },
+                        value,
+                    } => {
+                        let dest_location: Register = match ptr_rid {
+                            RegisterId::Local { .. } => {
+                                res.extend(mk_itype(
+                                    IType::LD,
+                                    Register::T3,
+                                    Register::S0,
+                                    stack_mp[ptr_rid] as u64,
+                                ));
+                                Register::T3
+                            }
+                            RegisterId::Arg { .. } | RegisterId::Temp { .. } => {
+                                allocations.next().unwrap().as_reg().unwrap().into()
+                            }
+                        };
+                        // maybe no value if struct
+                        match allocations.next() {
+                            Some(allocation) => {
+                                match value.dtype() {
+                                    ir::Dtype::Int { .. }
+                                    | ir::Dtype::Float { .. }
+                                    | ir::Dtype::Pointer { .. } => {
+                                        let value_reg: Register =
+                                            allocation.as_reg().unwrap().into();
+                                        // store reg to location
+                                        res.extend(mk_stype(
+                                            SType::store(value.dtype()),
+                                            dest_location,
+                                            value_reg,
+                                            0,
+                                        ));
+                                    }
+                                    ir::Dtype::Array { inner, size } => todo!(),
+                                    ir::Dtype::Struct { .. } => {
+                                        // value is an indirect pointer
+                                        let source_location: Register =
+                                            allocation.as_reg().unwrap().into();
+                                        cp_from_indirect_to_indirect(
+                                            source_location,
+                                            dest_location,
+                                            0,
+                                            value.dtype(),
+                                            &mut res,
+                                            source,
+                                        );
+                                    }
+                                    ir::Dtype::Unit { .. } => unreachable!(),
+                                    ir::Dtype::Function { .. } => unreachable!(),
+                                    ir::Dtype::Typedef { .. } => unreachable!(),
+                                }
+                            }
+                            None => {
+                                assert!(
+                                    matches!(value.dtype(), ir::Dtype::Struct { .. })
+                                        || matches!(ptr_rid, RegisterId::Local { .. })
+                                );
+                                let ir::Operand::Register { rid, dtype } = value else {
+                                    unreachable!()
+                                };
+                                let offset_to_s0 = stack_mp.get(rid).expect(&format!("{value}"));
                                 res.extend(mk_itype(
                                     IType::LD,
                                     Register::T2,
                                     Register::S0,
                                     *offset_to_s0 as u64,
                                 ));
-                                Register::T2
-                            }
-                        };
-                        cp_from_indirect_to_indirect(
-                            source_location,
-                            dest_location,
-                            0,
-                            dtype.clone(),
-                            &mut res,
-                            source,
-                        );
-                    }
-                }
-            }
-            ir::Instruction::Store {
-                ptr:
-                    ir::Operand::Constant(ir::Constant::GlobalVariable {
-                        name,
-                        dtype: dtype @ ir::Dtype::Int { .. },
-                    }),
-                value,
-            } => {
-                res.push(asm::Instruction::Pseudo(Pseudo::La {
-                    rd: Register::T1,
-                    symbol: Label(name.clone()),
-                }));
-                let rs2 = load_operand_to_reg(
-                    value.clone(),
-                    Register::T0,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
-                res.push(asm::Instruction::SType {
-                    instr: SType::store(dtype.clone()),
-                    rs1: Register::T1,
-                    rs2,
-                    imm: Immediate::Value(0),
-                });
-            }
-            ir::Instruction::Load {
-                ptr:
-                    ir::Operand::Register {
-                        rid,
-                        dtype: ir::Dtype::Pointer { inner, .. },
-                    },
-            } => {
-                let DirectOrInDirect::Direct(src) = register_mp.get(rid).unwrap() else {
-                    unreachable!()
-                };
-                let source_location = match src {
-                    RegOrStack::Reg(reg) => *reg,
-                    RegOrStack::Stack { offset_to_s0 } => {
-                        res.extend(mk_itype(
-                            IType::LD,
-                            Register::T2,
-                            Register::S0,
-                            *offset_to_s0 as u64,
-                        ));
-                        Register::T2
-                    }
-                };
-
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.extend(mk_itype(
-                            IType::load((**inner).clone()),
-                            *dest_reg,
-                            source_location,
-                            0,
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        cp_from_indirect_source(
-                            source_location,
-                            *offset_to_s0,
-                            0,
-                            (**inner).clone(),
-                            &mut res,
-                            source,
-                        );
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::Load {
-                ptr:
-                    ir::Operand::Constant(ir::Constant::GlobalVariable {
-                        name,
-                        dtype: dtype @ ir::Dtype::Int { .. },
-                    }),
-            } => match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                    res.push(asm::Instruction::Pseudo(Pseudo::La {
-                        rd: *dest_reg,
-                        symbol: Label(name.clone()),
-                    }));
-                    res.push(asm::Instruction::IType {
-                        instr: IType::load(dtype.clone()),
-                        rd: *dest_reg,
-                        rs1: *dest_reg,
-                        imm: Immediate::Value(0),
-                    });
-                }
-                DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                    res.push(asm::Instruction::Pseudo(Pseudo::La {
-                        rd: Register::T0,
-                        symbol: Label(name.clone()),
-                    }));
-                    res.push(asm::Instruction::IType {
-                        instr: IType::load(dtype.clone()),
-                        rd: Register::T0,
-                        rs1: Register::T0,
-                        imm: Immediate::Value(0),
-                    });
-                    res.extend(mk_stype(
-                        SType::store(dtype.clone()),
-                        Register::S0,
-                        Register::T0,
-                        *offset_to_s0 as u64,
-                    ));
-                }
-                DirectOrInDirect::InDirect(_) => unreachable!(),
-            },
-            ir::Instruction::Load {
-                ptr:
-                    ir::Operand::Constant(ir::Constant::GlobalVariable {
-                        name,
-                        dtype: dtype @ ir::Dtype::Float { .. },
-                    }),
-            } => {
-                res.push(asm::Instruction::Pseudo(Pseudo::La {
-                    rd: Register::T0,
-                    symbol: Label(name.clone()),
-                }));
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::IType {
-                            instr: IType::load(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(0),
-                        });
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::IType {
-                            instr: IType::load(dtype.clone()),
-                            rd: Register::FT0,
-                            rs1: Register::T0,
-                            imm: Immediate::Value(0),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::FT0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
-                }
-            }
-            ir::Instruction::Call {
-                callee,
-                args,
-                return_type,
-            } => {
-                let FunctionAbi {
-                    params_alloc,
-                    caller_alloc,
-                } = clown(callee, function_abi_mp, source);
-                if caller_alloc != 0 {
-                    res.extend(mk_itype(
-                        IType::Addi(DataSize::Double),
-                        Register::Sp,
-                        Register::Sp,
-                        (-(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap())) as u64,
-                    ));
-                }
-
-                let mut to_be_cp_parallel: Vec<(Register, Register, ir::Dtype)> = Vec::new();
-                let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
-
-                for (operand, alloc) in izip!(args, params_alloc) {
-                    match (alloc, operand) {
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
-                                target_reg,
-                            ))),
-                            ir::Operand::Constant(c),
-                        ) => {
-                            load_constant_to_reg(
-                                c.clone(),
-                                target_reg,
-                                &mut after_cp_parallel,
-                                float_mp,
-                            );
-                        }
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
-                                target_reg,
-                            ))),
-                            ir::Operand::Register { rid, dtype },
-                        ) => match register_mp.get(rid).unwrap().flatten() {
-                            RegOrStack::Reg(src_reg) => {
-                                if *src_reg != target_reg {
-                                    to_be_cp_parallel.push((*src_reg, target_reg, dtype.clone()))
-                                }
-                            }
-                            RegOrStack::Stack { .. } => {
-                                store_operand_to_reg(
-                                    operand.clone(),
-                                    target_reg,
-                                    &mut after_cp_parallel,
-                                    register_mp,
-                                    float_mp,
+                                let source_location = Register::T2;
+                                cp_from_indirect_to_indirect(
+                                    source_location,
+                                    dest_location,
+                                    0,
+                                    dtype.clone(),
+                                    &mut res,
+                                    source,
                                 );
                             }
-                        },
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
-                                RegOrStack::Stack { offset_to_s0 },
-                            )),
-                            ir::Operand::Constant(..),
-                        ) => {
-                            assert!(offset_to_s0 > 0);
-                            operand_to_stack(
-                                operand.clone(),
-                                (Register::Sp, offset_to_s0 as u64),
-                                &mut after_cp_parallel,
-                                register_mp,
-                                float_mp,
-                            );
                         }
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
-                                RegOrStack::Stack { .. },
-                            )),
-                            ir::Operand::Register { .. },
-                        ) => {
-                            unreachable!("{}", operand.dtype())
+                    }
+
+                    ir::Instruction::Load {
+                        ptr:
+                            ir::Operand::Constant(ir::Constant::GlobalVariable {
+                                name,
+                                dtype: dtype @ ir::Dtype::Int { .. },
+                            }),
+                    } => match allocations.next().unwrap().as_reg() {
+                        Some(dest_reg) => {
+                            let rd = dest_reg.into();
+                            res.push(asm::Instruction::Pseudo(Pseudo::La {
+                                rd,
+                                symbol: Label(name.clone()),
+                            }));
+                            res.push(asm::Instruction::IType {
+                                instr: IType::load(dtype.clone()),
+                                rd,
+                                rs1: rd,
+                                imm: Immediate::Value(0),
+                            });
                         }
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(RegOrStack::Reg(
-                                target_reg,
-                            ))),
-                            ir::Operand::Register { rid, .. },
-                        ) => match register_mp.get(rid).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                after_cp_parallel.extend(mk_itype(
-                                    IType::Addi(DataSize::Double),
-                                    target_reg,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::Reg(_)) => unreachable!(),
-                            DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
-                                after_cp_parallel.extend(mk_itype(
-                                    IType::LD,
-                                    target_reg,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(RegOrStack::Reg(src_reg)) => {
-                                if *src_reg != target_reg {
-                                    to_be_cp_parallel.push((*src_reg, target_reg, operand.dtype()));
-                                }
-                            }
-                        },
-                        (
-                            ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
-                                RegOrStack::Stack {
-                                    offset_to_s0: target_offset,
-                                },
-                            )),
-                            ir::Operand::Register { rid, .. },
-                        ) => match register_mp.get(rid).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                after_cp_parallel.extend(mk_itype(
-                                    IType::Addi(DataSize::Double),
-                                    Register::T0,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                                after_cp_parallel.extend(mk_stype(
-                                    SType::Store(DataSize::Double),
-                                    Register::Sp,
-                                    Register::T0,
-                                    target_offset as u64,
-                                ));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::Reg(_)) => {
-                                unreachable!()
-                            }
-                            DirectOrInDirect::InDirect(RegOrStack::Stack { offset_to_s0 }) => {
-                                after_cp_parallel.extend(mk_itype(
-                                    IType::LD,
-                                    Register::T0,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                                after_cp_parallel.extend(mk_stype(
-                                    SType::Store(DataSize::Double),
-                                    Register::Sp,
-                                    Register::T0,
-                                    target_offset as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => {
-                                after_cp_parallel.extend(mk_stype(
-                                    SType::Store(DataSize::Double),
-                                    Register::Sp,
-                                    *reg,
-                                    target_offset as u64,
-                                ));
-                            }
-                        },
-                        (
-                            ParamAlloc::StructInRegister(v),
-                            ir::Operand::Register {
-                                rid,
-                                dtype:
-                                    ir::Dtype::Struct {
-                                        name,
-                                        fields,
-                                        size_align_offsets,
-                                        ..
-                                    },
-                            },
-                        ) => {
-                            let DirectOrInDirect::Direct(RegOrStack::Stack {
-                                offset_to_s0: base_offset,
-                            }) = *register_mp.get(rid).unwrap()
-                            else {
-                                unreachable!()
-                            };
+                        None => todo!(),
+                    },
 
-                            let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
-                                size_align_offsets.clone()
-                            } else {
-                                source
-                                    .structs
-                                    .get(name.as_ref().unwrap())
-                                    .and_then(|x| x.as_ref())
-                                    .and_then(|x| x.get_struct_size_align_offsets())
-                                    .and_then(|x| x.as_ref())
-                                    .cloned()
-                            }) else {
-                                unreachable!()
-                            };
-
-                            let Some(fields) = (if fields.is_some() {
-                                fields.clone()
-                            } else {
-                                source
-                                    .structs
-                                    .get(name.as_ref().unwrap())
-                                    .and_then(|x| x.as_ref())
-                                    .and_then(|x| x.get_struct_fields())
-                                    .and_then(|x| x.as_ref())
-                                    .cloned()
-                            }) else {
-                                unreachable!()
-                            };
-
-                            for (register_couple, offset, dtype) in izip!(v, offsets, fields) {
-                                match register_couple {
-                                    RegisterCouple::Single(register) => {
-                                        after_cp_parallel.extend(mk_itype(
-                                            IType::load((*dtype).clone()),
-                                            register,
-                                            Register::S0,
-                                            (base_offset
-                                                + <usize as TryInto<i64>>::try_into(offset)
-                                                    .unwrap())
-                                                as u64,
-                                        ));
-                                    }
-                                    RegisterCouple::Double(register) => {
-                                        after_cp_parallel.extend(mk_itype(
-                                            IType::LD,
-                                            register,
-                                            Register::S0,
-                                            (base_offset
-                                                + <usize as TryInto<i64>>::try_into(offset)
-                                                    .unwrap())
-                                                as u64,
-                                        ));
-                                    }
-                                    RegisterCouple::MergedToPrevious => {}
-                                }
-                            }
-                            todo!()
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-
-                res.extend(cp_parallel(to_be_cp_parallel));
-                res.extend(after_cp_parallel);
-
-                match return_type {
-                    ir::Dtype::Struct { .. } => {
-                        let DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) =
-                            register_mp.get(&RegisterId::Temp { bid, iid }).unwrap()
-                        else {
-                            unreachable!()
-                        };
-                        res.extend(mk_itype(
-                            IType::Addi(DataSize::Double),
-                            Register::T0,
-                            Register::S0,
-                            *offset_to_s0 as u64,
-                        ));
-                        res.extend(mk_stype(SType::SD, Register::Sp, Register::T0, 0));
-                    }
-                    ir::Dtype::Array { .. } => unreachable!(),
-                    _ => {}
-                }
-
-                match callee {
-                    ir::Operand::Constant(ir::Constant::GlobalVariable {
-                        name,
-                        dtype: ir::Dtype::Function { .. },
-                    }) => {
-                        res.push(asm::Instruction::Pseudo(Pseudo::Call {
-                            offset: Label(name.clone()),
-                        }));
-                    }
-                    ir::Operand::Register {
-                        rid,
-                        dtype: ir::Dtype::Pointer { .. },
+                    ir::Instruction::Load {
+                        ptr:
+                            ir::Operand::Constant(ir::Constant::GlobalVariable {
+                                name,
+                                dtype: dtype @ ir::Dtype::Float { .. },
+                            }),
                     } => {
-                        let rs = match register_mp.get(rid).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Reg(reg)) => *reg,
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_itype(
-                                    IType::LD,
-                                    Register::T0,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                                Register::T0
-                            }
-                            DirectOrInDirect::InDirect(_) => unreachable!(),
-                        };
-                        res.push(asm::Instruction::Pseudo(Pseudo::Jalr { rs }));
-                    }
-                    _ => unreachable!(),
-                }
-
-                match return_type {
-                    ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
-                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs: Register::A0,
-                                }));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_stype(
-                                    SType::store(return_type.clone()),
-                                    Register::S0,
-                                    Register::A0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(_) => unreachable!(),
-                        }
-                    }
-                    ir::Dtype::Float { .. } => {
-                        match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
-                                    rd: *dest_reg,
-                                    rs: Register::FA0,
-                                    data_size: DataSize::try_from(return_type.clone()).unwrap(),
-                                }));
-                            }
-                            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                                res.extend(mk_stype(
-                                    SType::store(return_type.clone()),
-                                    Register::S0,
-                                    Register::FA0,
-                                    *offset_to_s0 as u64,
-                                ));
-                            }
-                            DirectOrInDirect::InDirect(_) => unreachable!(),
-                        }
-                    }
-                    _ => {}
-                }
-
-                if caller_alloc != 0 {
-                    res.extend(mk_itype(
-                        IType::Addi(DataSize::Double),
-                        Register::Sp,
-                        Register::Sp,
-                        (caller_alloc).try_into().unwrap(),
-                    ));
-                }
-            }
-            ir::Instruction::TypeCast {
-                value,
-                target_dtype:
-                    to @ ir::Dtype::Int {
-                        width: width_target,
-                        is_signed: is_signed_target,
-                        ..
-                    },
-            } => {
-                let from = value.dtype();
-
-                match (
-                    &from,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int {
-                            width: 1,
-                            is_signed: true,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
-                    ) => match (width_target, is_signed_target) {
-                        (8, true) => unimplemented!(),
-                        (8, false) => unimplemented!(),
-                        (16, true) => unimplemented!(),
-                        (16, false) => unimplemented!(),
-                        (32, true) => unimplemented!(),
-                        (32, false) => unimplemented!(),
-                        (64, true) => unimplemented!(),
-                        (64, false) => unimplemented!(),
-                        _ => unreachable!(),
-                    },
-                    (
-                        ir::Dtype::Int {
-                            width: 1,
-                            is_signed: false,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd: *dest_reg, rs }));
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 8,
-                            is_signed: true,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => unreachable!(),
-                            (8, false) => {
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Andi,
-                                    rd: *dest_reg,
-                                    rs1: reg,
-                                    imm: Immediate::Value(255),
-                                });
-                            }
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs: reg,
-                                }));
-                            }
-                            (32, false) => unimplemented!(),
-                            (64, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs: reg,
-                                }));
-                            }
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 8,
-                            is_signed: false,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => unimplemented!(),
-                            (8, false) => unimplemented!(),
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (32, false) => unimplemented!(),
-                            (64, true) => unimplemented!(),
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 16,
-                            is_signed: true,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => unimplemented!(),
-                            (8, false) => unimplemented!(),
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => unimplemented!(),
-                            (32, false) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (64, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 16,
-                            is_signed: false,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(_dest_reg)),
-                    ) => match (width_target, is_signed_target) {
-                        (8, true) => unimplemented!(),
-                        (8, false) => unimplemented!(),
-                        (16, true) => unimplemented!(),
-                        (16, false) => unimplemented!(),
-                        (32, true) => unimplemented!(),
-                        (32, false) => unimplemented!(),
-                        (64, true) => unimplemented!(),
-                        (64, false) => unimplemented!(),
-                        _ => unreachable!(),
-                    },
-                    (
-                        ir::Dtype::Int {
-                            width: 32,
-                            is_signed: true,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Slli(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Srai(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                            }
-                            (8, false) => {
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Andi,
-                                    rd: *dest_reg,
-                                    rs1: rs,
-                                    imm: Immediate::Value(255),
-                                });
-                            }
-                            (16, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Slli(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(48),
-                                });
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Srai(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(48),
-                                });
-                            }
-                            (16, false) => unimplemented!(),
-                            (32, true) => unimplemented!(),
-                            (32, false) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (64, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (64, false) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 32,
-                            is_signed: false,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Slli(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Srai(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                            }
-                            (8, false) => unimplemented!(),
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => unimplemented!(),
-                            (32, false) => unimplemented!(),
-                            (64, true) => unimplemented!(),
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 64,
-                            is_signed: true,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                                    rd: *dest_reg,
-                                    rs: reg,
-                                }));
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Slli(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Srai(DataSize::Double),
-                                    rd: *dest_reg,
-                                    rs1: *dest_reg,
-                                    imm: Immediate::Value(56),
-                                });
-                            }
-                            (8, false) => {
-                                res.push(asm::Instruction::IType {
-                                    instr: IType::Andi,
-                                    rd: *dest_reg,
-                                    rs1: reg,
-                                    imm: Immediate::Value(255),
-                                });
-                            }
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::SextW {
-                                    rd: *dest_reg,
-                                    rs: reg,
-                                }));
-                            }
-                            (32, false) => unimplemented!(),
-                            (64, true) => unimplemented!(),
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int {
-                            width: 64,
-                            is_signed: false,
-                            ..
-                        },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        match (width_target, is_signed_target) {
-                            (8, true) => unimplemented!(),
-                            (8, false) => unimplemented!(),
-                            (16, true) => unimplemented!(),
-                            (16, false) => unimplemented!(),
-                            (32, true) => {
-                                res.push(asm::Instruction::Pseudo(Pseudo::SextW {
-                                    rd: *dest_reg,
-                                    rs,
-                                }));
-                            }
-                            (32, false) => unimplemented!(),
-                            (64, true) => unimplemented!(),
-                            (64, false) => unimplemented!(),
-                            _ => unreachable!(),
-                        }
-                    }
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let reg = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.extend(mk_stype(
-                            SType::store(to.clone()),
-                            Register::S0,
-                            reg,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let reg = load_operand_to_reg(
-                            value.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::fcvt_float_to_int(from, to.clone()),
-                            rd: *dest_reg,
-                            rs1: reg,
-                            rs2: None,
-                        });
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            value.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::fcvt_float_to_int(from, to.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: None,
-                        });
-                        res.extend(mk_stype(
-                            SType::store(to.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!("{from}"),
-                }
-            }
-            ir::Instruction::TypeCast {
-                value,
-                target_dtype: to @ ir::Dtype::Float { .. },
-            } => {
-                let from = value.dtype();
-
-                match (
-                    &from,
-                    register_mp.get(&RegisterId::Temp { bid, iid }).unwrap(),
-                ) {
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::fcvt_int_to_float(from, to.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: None,
-                        });
-                    }
-                    (
-                        ir::Dtype::Int { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            value.clone(),
-                            Register::T0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::fcvt_int_to_float(from, to.clone()),
-                            rd: Register::FT1,
-                            rs1,
-                            rs2: None,
-                        });
-                        res.extend(mk_stype(
-                            SType::store(to.clone()),
-                            Register::S0,
-                            Register::FT1,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            value.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::FcvtFloatToFloat {
-                                from: DataSize::try_from(from).unwrap(),
-                                to: DataSize::try_from(to.clone()).unwrap(),
-                            },
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: None,
-                        });
-                    }
-                    (
-                        ir::Dtype::Float { .. },
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
-                    ) => {
-                        let rs1 = load_operand_to_reg(
-                            value.clone(),
-                            Register::FT0,
-                            &mut res,
-                            register_mp,
-                            float_mp,
-                        );
-                        res.push(asm::Instruction::RType {
-                            instr: RType::FcvtFloatToFloat {
-                                from: DataSize::try_from(from).unwrap(),
-                                to: DataSize::try_from(to.clone()).unwrap(),
-                            },
-                            rd: Register::FT1,
-                            rs1,
-                            rs2: None,
-                        });
-                        res.extend(mk_stype(
-                            SType::store(to.clone()),
-                            Register::S0,
-                            Register::FT1,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            ir::Instruction::GetElementPtr {
-                ptr,
-                offset,
-                dtype: dtype @ ir::Dtype::Pointer { .. },
-            } => {
-                let rs1 = match ptr {
-                    ir::Operand::Constant(ir::Constant::GlobalVariable { name, .. }) => {
                         res.push(asm::Instruction::Pseudo(Pseudo::La {
                             rd: Register::T0,
                             symbol: Label(name.clone()),
                         }));
-                        Register::T0
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::IType {
+                                    instr: IType::load(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1: Register::T0,
+                                    imm: Immediate::Value(0),
+                                });
+                            }
+                            None => todo!(),
+                        }
                     }
-                    ptr @ ir::Operand::Register { .. } => load_operand_to_reg(
-                        ptr.clone(),
-                        Register::T0,
-                        &mut res,
-                        register_mp,
-                        float_mp,
-                    ),
-                    _ => unreachable!(),
-                };
-                let rs2 = load_operand_to_reg(
-                    offset.clone(),
-                    Register::T1,
-                    &mut res,
-                    register_mp,
-                    float_mp,
-                );
 
-                match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => {
-                        res.push(asm::Instruction::RType {
-                            instr: RType::add(dtype.clone()),
-                            rd: *dest_reg,
-                            rs1,
-                            rs2: Some(rs2),
-                        });
+                    ir::Instruction::Load {
+                        ptr:
+                            ir::Operand::Register {
+                                rid,
+                                dtype: ir::Dtype::Pointer { inner, .. },
+                            },
+                    } => {
+                        let source_location: Register = match rid {
+                            RegisterId::Local { .. } => {
+                                let offset_to_s0 = stack_mp[rid];
+                                res.extend(mk_itype(
+                                    IType::LD,
+                                    Register::T2,
+                                    Register::S0,
+                                    offset_to_s0 as u64,
+                                ));
+                                Register::T2
+                            }
+                            RegisterId::Arg { .. } | RegisterId::Temp { .. } => {
+                                allocations.next().unwrap().as_reg().unwrap().into()
+                            }
+                        };
+                        match allocations.next() {
+                            Some(dest_reg) => {
+                                res.extend(mk_itype(
+                                    IType::load((**inner).clone()),
+                                    dest_reg.as_reg().unwrap().into(),
+                                    source_location,
+                                    0,
+                                ));
+                            }
+                            None => {
+                                let offset_to_s0 = stack_mp[&RegisterId::Temp { bid, iid }];
+                                cp_from_indirect_source(
+                                    source_location,
+                                    offset_to_s0,
+                                    0,
+                                    (**inner).clone(),
+                                    &mut res,
+                                    source,
+                                );
+                            }
+                        }
                     }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        res.push(asm::Instruction::RType {
-                            instr: RType::add(dtype.clone()),
-                            rd: Register::T0,
-                            rs1,
-                            rs2: Some(rs2),
-                        });
-                        res.extend(mk_stype(
-                            SType::store(dtype.clone()),
-                            Register::S0,
-                            Register::T0,
-                            *offset_to_s0 as u64,
-                        ));
+
+                    ir::Instruction::TypeCast {
+                        value,
+                        target_dtype:
+                            to @ ir::Dtype::Int {
+                                width: width_target,
+                                is_signed: is_signed_target,
+                                ..
+                            },
+                    } => {
+                        let rs: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rd: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match value.dtype() {
+                            ir::Dtype::Int {
+                                width: 1,
+                                is_signed: true,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unimplemented!(),
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => unimplemented!(),
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 1,
+                                is_signed: false,
+                                ..
+                            } => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                            }
+
+                            ir::Dtype::Int {
+                                width: 8,
+                                is_signed: true,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unreachable!(),
+                                (8, false) => {
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Andi,
+                                        rd,
+                                        rs1: rs,
+                                        imm: Immediate::Value(255),
+                                    });
+                                }
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (32, false) => unimplemented!(),
+                                (64, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 8,
+                                is_signed: false,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unimplemented!(),
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 16,
+                                is_signed: true,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unimplemented!(),
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => unimplemented!(),
+                                (32, false) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (64, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 16,
+                                is_signed: false,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unimplemented!(),
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => unimplemented!(),
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 32,
+                                is_signed: true,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Slli(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Srai(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                }
+                                (8, false) => {
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Andi,
+                                        rd,
+                                        rs1: rs,
+                                        imm: Immediate::Value(255),
+                                    });
+                                }
+                                (16, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Slli(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(48),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Srai(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(48),
+                                    });
+                                }
+                                (16, false) => unimplemented!(),
+                                (32, true) => unimplemented!(),
+                                (32, false) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (64, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                (64, false) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                }
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 32,
+                                is_signed: false,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Slli(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Srai(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                }
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => unimplemented!(),
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 64,
+                                is_signed: true,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }));
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Slli(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Srai(DataSize::Double),
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(56),
+                                    });
+                                }
+                                (8, false) => {
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Andi,
+                                        rd,
+                                        rs1: rs,
+                                        imm: Immediate::Value(255),
+                                    });
+                                }
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::SextW { rd, rs }));
+                                }
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Int {
+                                width: 64,
+                                is_signed: false,
+                                ..
+                            } => match (width_target, is_signed_target) {
+                                (8, true) => unimplemented!(),
+                                (8, false) => unimplemented!(),
+                                (16, true) => unimplemented!(),
+                                (16, false) => unimplemented!(),
+                                (32, true) => {
+                                    res.push(asm::Instruction::Pseudo(Pseudo::SextW { rd, rs }));
+                                }
+                                (32, false) => unimplemented!(),
+                                (64, true) => unimplemented!(),
+                                (64, false) => unimplemented!(),
+                                _ => unreachable!(),
+                            },
+                            ir::Dtype::Float { .. } => {
+                                res.push(asm::Instruction::RType {
+                                    instr: RType::fcvt_float_to_int(value.dtype(), to.clone()),
+                                    rd,
+                                    rs1: rs,
+                                    rs2: None,
+                                });
+                            }
+                            _ => unreachable!("{instr}"),
+                        }
                     }
-                    DirectOrInDirect::InDirect(_) => unreachable!(),
+
+                    ir::Instruction::TypeCast {
+                        value,
+                        target_dtype: to @ ir::Dtype::Float { .. },
+                    } => {
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let rd: Register = allocations.next().unwrap().as_reg().unwrap().into();
+
+                        match value.dtype() {
+                            ir::Dtype::Int { .. } => {
+                                res.push(asm::Instruction::RType {
+                                    instr: RType::fcvt_int_to_float(value.dtype(), to.clone()),
+                                    rd,
+                                    rs1,
+                                    rs2: None,
+                                });
+                            }
+                            ir::Dtype::Float { .. } => {
+                                res.push(asm::Instruction::RType {
+                                    instr: RType::FcvtFloatToFloat {
+                                        from: DataSize::try_from(value.dtype()).unwrap(),
+                                        to: DataSize::try_from(to.clone()).unwrap(),
+                                    },
+                                    rd,
+                                    rs1,
+                                    rs2: None,
+                                });
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+
+                    ir::Instruction::GetElementPtr { ptr, offset, dtype } => {
+                        let rs1 = match ptr {
+                            ir::Operand::Constant(ir::Constant::GlobalVariable {
+                                name, ..
+                            }) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::La {
+                                    rd: Register::T0,
+                                    symbol: Label(name.clone()),
+                                }));
+                                Register::T0
+                            }
+                            ptr @ ir::Operand::Register { .. } => {
+                                allocations.next().unwrap().as_reg().unwrap().into()
+                            }
+                            _ => unreachable!(),
+                        };
+                        let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        match allocations.next().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.push(asm::Instruction::RType {
+                                    instr: RType::add(dtype.clone()),
+                                    rd: dest_reg.into(),
+                                    rs1,
+                                    rs2: Some(rs2),
+                                });
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::Call {
+                        callee,
+                        args,
+                        return_type,
+                    } => {
+                        let FunctionAbi {
+                            params_alloc,
+                            caller_alloc,
+                        } = clown(callee, function_abi_mp, source);
+                        if caller_alloc != 0 {
+                            res.extend(mk_itype(
+                                IType::Addi(DataSize::Double),
+                                Register::Sp,
+                                Register::Sp,
+                                (-(<usize as TryInto<i64>>::try_into(caller_alloc).unwrap()))
+                                    as u64,
+                            ));
+                        }
+
+                        let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
+
+                        for (alloc, operand) in izip!(params_alloc, args) {
+                            match (alloc, operand) {
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Constant(c),
+                                ) => {
+                                    load_constant_to_reg(
+                                        c.clone(),
+                                        target_reg,
+                                        &mut after_cp_parallel,
+                                        float_mp,
+                                    );
+                                }
+                                // TODO: below
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Register { rid, dtype },
+                                ) => {
+                                    // do nothing
+                                    // regalloc2 do it
+                                    let reg: Register =
+                                        allocations.next().unwrap().as_reg().unwrap().into();
+                                    assert_eq!(reg, target_reg);
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Stack { offset_to_s0 },
+                                    )),
+                                    ir::Operand::Constant(c),
+                                ) => {
+                                    assert!(offset_to_s0 > 0);
+                                    constant_to_stack(
+                                        c.clone(),
+                                        (Register::Sp, offset_to_s0 as u64),
+                                        &mut after_cp_parallel,
+                                        float_mp,
+                                    );
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
+                                        RegOrStack::Stack { .. },
+                                    )),
+                                    ir::Operand::Register { .. },
+                                ) => {
+                                    unreachable!("{}", operand.dtype())
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                        RegOrStack::Reg(target_reg),
+                                    )),
+                                    ir::Operand::Register { rid, .. },
+                                ) => {
+                                    match stack_mp.get(rid) {
+                                        Some(offset_to_s0) => {
+                                            after_cp_parallel.extend(mk_itype(
+                                                IType::Addi(DataSize::Double),
+                                                target_reg,
+                                                Register::S0,
+                                                *offset_to_s0 as u64,
+                                            ));
+                                        }
+                                        None => {
+                                            // regalloc2 deal with
+                                            let reg: Register = allocations
+                                                .next()
+                                                .unwrap()
+                                                .as_reg()
+                                                .unwrap()
+                                                .into();
+                                            assert_eq!(reg, target_reg);
+                                        }
+                                    }
+                                }
+                                (
+                                    ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
+                                        RegOrStack::Stack {
+                                            offset_to_s0: target_offset,
+                                        },
+                                    )),
+                                    ir::Operand::Register { rid, .. },
+                                ) => match stack_mp.get(rid) {
+                                    Some(offset_to_s0) => {
+                                        after_cp_parallel.extend(mk_itype(
+                                            IType::Addi(DataSize::Double),
+                                            Register::T0,
+                                            Register::S0,
+                                            *offset_to_s0 as u64,
+                                        ));
+                                        after_cp_parallel.extend(mk_stype(
+                                            SType::Store(DataSize::Double),
+                                            Register::Sp,
+                                            Register::T0,
+                                            target_offset as u64,
+                                        ));
+                                    }
+                                    None => {
+                                        let rs2 =
+                                            allocations.next().unwrap().as_reg().unwrap().into();
+                                        after_cp_parallel.extend(mk_stype(
+                                            SType::Store(DataSize::Double),
+                                            Register::Sp,
+                                            rs2,
+                                            target_offset as u64,
+                                        ));
+                                    }
+                                },
+                                (
+                                    ParamAlloc::StructInRegister(v),
+                                    ir::Operand::Register {
+                                        rid,
+                                        dtype:
+                                            ir::Dtype::Struct {
+                                                name,
+                                                fields,
+                                                size_align_offsets,
+                                                ..
+                                            },
+                                    },
+                                ) => {
+                                    let base_offset = stack_mp[rid];
+
+                                    let Some((_, _, offsets)) = (if size_align_offsets.is_some() {
+                                        size_align_offsets.clone()
+                                    } else {
+                                        source
+                                            .structs
+                                            .get(name.as_ref().unwrap())
+                                            .and_then(|x| x.as_ref())
+                                            .and_then(|x| x.get_struct_size_align_offsets())
+                                            .and_then(|x| x.as_ref())
+                                            .cloned()
+                                    }) else {
+                                        unreachable!()
+                                    };
+
+                                    let Some(fields) = (if fields.is_some() {
+                                        fields.clone()
+                                    } else {
+                                        source
+                                            .structs
+                                            .get(name.as_ref().unwrap())
+                                            .and_then(|x| x.as_ref())
+                                            .and_then(|x| x.get_struct_fields())
+                                            .and_then(|x| x.as_ref())
+                                            .cloned()
+                                    }) else {
+                                        unreachable!()
+                                    };
+
+                                    for (register_couple, offset, dtype) in
+                                        izip!(v, offsets, fields)
+                                    {
+                                        match register_couple {
+                                            RegisterCouple::Single(register) => {
+                                                after_cp_parallel.extend(mk_itype(
+                                                    IType::load((*dtype).clone()),
+                                                    register,
+                                                    Register::S0,
+                                                    (base_offset
+                                                        + <usize as TryInto<i64>>::try_into(offset)
+                                                            .unwrap())
+                                                        as u64,
+                                                ));
+                                            }
+                                            RegisterCouple::Double(register) => {
+                                                after_cp_parallel.extend(mk_itype(
+                                                    IType::LD,
+                                                    register,
+                                                    Register::S0,
+                                                    (base_offset
+                                                        + <usize as TryInto<i64>>::try_into(offset)
+                                                            .unwrap())
+                                                        as u64,
+                                                ));
+                                            }
+                                            RegisterCouple::MergedToPrevious => {}
+                                        }
+                                    }
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+
+                        res.extend(after_cp_parallel);
+
+                        match return_type {
+                            ir::Dtype::Struct { .. } => {
+                                let offset_to_s0 = stack_mp[&RegisterId::Temp { bid, iid }];
+                                res.extend(mk_itype(
+                                    IType::Addi(DataSize::Double),
+                                    Register::T0,
+                                    Register::S0,
+                                    offset_to_s0 as u64,
+                                ));
+                                res.extend(mk_stype(SType::SD, Register::Sp, Register::T0, 0));
+                            }
+                            ir::Dtype::Array { .. } => unreachable!(),
+                            _ => {}
+                        }
+
+                        match callee {
+                            ir::Operand::Constant(ir::Constant::GlobalVariable {
+                                name,
+                                dtype: ir::Dtype::Function { .. },
+                            }) => {
+                                res.push(asm::Instruction::Pseudo(Pseudo::Call {
+                                    offset: Label(name.clone()),
+                                }));
+                            }
+                            ir::Operand::Register {
+                                rid,
+                                dtype: ir::Dtype::Pointer { .. },
+                            } => {
+                                let rs = allocations.next().unwrap().as_reg().unwrap().into();
+                                assert!(!matches!(rs, Register::Arg(_, _)));
+                                res.push(asm::Instruction::Pseudo(Pseudo::Jalr { rs }));
+                            }
+                            _ => unreachable!(),
+                        }
+
+                        match return_type {
+                            ir::Dtype::Pointer { .. } | ir::Dtype::Int { .. } => {
+                                let rs: Register =
+                                    allocations.next().unwrap().as_reg().unwrap().into();
+                                assert_eq!(Register::A0, rs);
+                            }
+                            ir::Dtype::Float { .. } => {
+                                let rs: Register =
+                                    allocations.next().unwrap().as_reg().unwrap().into();
+                                assert_eq!(Register::FA0, rs);
+                            }
+                            _ => {}
+                        }
+
+                        if caller_alloc != 0 {
+                            res.extend(mk_itype(
+                                IType::Addi(DataSize::Double),
+                                Register::Sp,
+                                Register::Sp,
+                                (caller_alloc).try_into().unwrap(),
+                            ));
+                        }
+                    }
+
+                    ir::Instruction::Nop => {}
+                    _ => unreachable!("{instr}"),
+                }
+
+                match instr.dtype() {
+                    ir::Dtype::Float { .. } => {
+                        let _ = slate.insert(
+                            RegisterId::Temp { bid, iid },
+                            *output.inst_allocs(insn).last().unwrap(),
+                        );
+                    }
+                    _ => {}
                 }
             }
-            ir::Instruction::Nop => {}
-            _ => unreachable!("{:?}", &**instr),
+            Yank::AllocateConstBeforeJump(_) => {
+                let mut constant_allocation_iter = output.inst_allocs(insn).iter();
+                for jump_arg in block.exit.walk_jump_args_1() {
+                    for c in jump_arg.walk_constant_arg() {
+                        let reg = constant_2_allocation(
+                            c.clone(),
+                            *constant_allocation_iter.next().unwrap(),
+                            &mut res,
+                            float_mp,
+                        );
+                    }
+                }
+            }
+            Yank::BlockExit(_) => {
+                match &block.exit {
+                    ir::BlockExit::Jump { arg } => {
+                        gen_jump_arg(func_name, arg, &mut res);
+                    }
+                    ir::BlockExit::ConditionalJump {
+                        condition: ir::Operand::Constant(_),
+                        ..
+                    }
+                    | ir::BlockExit::Switch {
+                        value: ir::Operand::Constant(_),
+                        ..
+                    } => {
+                        unreachable!("should be optimized in ir")
+                    }
+
+                    ir::BlockExit::ConditionalJump {
+                        condition: ir::Operand::Register { .. },
+                        arg_then,
+                        arg_else,
+                    } => {
+                        let rs1 = match output.inst_allocs(insn).first() {
+                            Some(allocation) => allocation_2_reg(*allocation, Register::T0),
+                            None => {
+                                unreachable!()
+                            }
+                        };
+                        let else_label =
+                            gen_jump_arg_or_new_block(func_name, bid, arg_else, temp_block);
+                        res.push(asm::Instruction::BType {
+                            instr: asm::BType::Beq,
+                            rs1,
+                            rs2: Register::Zero,
+                            imm: else_label,
+                        });
+                        gen_jump_arg(func_name, arg_then, &mut res);
+                    }
+
+                    ir::BlockExit::Switch {
+                        value: value @ ir::Operand::Register { .. },
+                        default,
+                        cases,
+                    } => {
+                        let dtype = value.dtype();
+                        let rs1 = match output.inst_allocs(insn).first() {
+                            Some(allocation) => allocation_2_reg(*allocation, Register::T0),
+                            None => {
+                                unreachable!()
+                            }
+                        };
+                        for (c, jump_arg) in cases {
+                            let ir::Constant::Int { value, .. } = c else {
+                                unreachable!()
+                            };
+                            let data_size = DataSize::try_from(dtype.clone()).unwrap();
+                            res.extend(mk_itype(
+                                IType::Addi(data_size),
+                                Register::T1,
+                                Register::Zero,
+                                *value as u64 & data_size.mask(),
+                            ));
+                            let then_label =
+                                gen_jump_arg_or_new_block(func_name, bid, jump_arg, temp_block);
+                            res.push(asm::Instruction::BType {
+                                instr: asm::BType::Beq,
+                                rs1,
+                                rs2: Register::T1,
+                                imm: then_label,
+                            })
+                        }
+                        gen_jump_arg(func_name, default, &mut res);
+                    }
+
+                    ir::BlockExit::Return { value } => {
+                        match value.dtype() {
+                            ir::Dtype::Unit { .. } => {}
+                            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
+                                match value {
+                                    ir::Operand::Constant(c) => {
+                                        load_constant_to_reg(
+                                            c.clone(),
+                                            Register::A0,
+                                            &mut res,
+                                            float_mp,
+                                        );
+                                    }
+                                    ir::Operand::Register { .. } => {
+                                        // already in regalloc2
+                                    }
+                                }
+                            }
+                            ir::Dtype::Float { .. } => {
+                                match value {
+                                    ir::Operand::Constant(c) => {
+                                        load_constant_to_reg(
+                                            c.clone(),
+                                            Register::A0,
+                                            &mut res,
+                                            float_mp,
+                                        );
+                                    }
+                                    ir::Operand::Register { .. } => {
+                                        // already in regalloc2
+                                    }
+                                }
+                            }
+                            ir::Dtype::Struct { .. } => match value {
+                                ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
+                                ir::Operand::Register { rid, dtype } => {
+                                    let dest = stack_mp.get(rid).unwrap();
+                                    res.extend(mk_itype(IType::LD, Register::T3, Register::S0, 0));
+                                    cp_to_indirect_target(
+                                        (Register::S0, *dest),
+                                        Register::T3,
+                                        0,
+                                        dtype.clone(),
+                                        &mut res,
+                                        source,
+                                    );
+                                }
+                                _ => unreachable!(),
+                            },
+                            _ => unreachable!(),
+                        }
+                        res.push(asm::Instruction::Pseudo(Pseudo::Ret));
+                    }
+                    ir::BlockExit::Unreachable => unreachable!(),
+                }
+            }
         }
 
         res.extend(
@@ -3905,227 +2215,9 @@ fn translate_block(
                         None
                     }
                 })
-                .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
+                .flat_map(|x| gape.edit_2_instruction(x, slate)),
         );
     }
-
-    // no edit before/after
-    let insn = *gape
-        .inst_mp
-        .get_by_left(&Yank::AllocateConstBeforeJump(bid))
-        .unwrap();
-
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::before(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::after(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
-
-    // assign constant to registers
-    // TODO: better way is to assign in each JumpArg
-    let mut constant_allocation_iter = output.inst_allocs(insn).iter();
-    for jump_arg in block.exit.walk_jump_args_1() {
-        for c in jump_arg.walk_constant_arg() {
-            let reg = constant_2_allocation(
-                c.clone(),
-                *constant_allocation_iter.next().unwrap(),
-                &mut res,
-                float_mp,
-            );
-        }
-    }
-
-    let insn = *gape.inst_mp.get_by_left(&Yank::BlockExit(bid)).unwrap();
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::before(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
-
-    match &block.exit {
-        ir::BlockExit::Jump { arg } => {
-            gen_jump_arg(func_name, arg, &mut res, register_mp, float_mp);
-        }
-        ir::BlockExit::ConditionalJump {
-            condition: ir::Operand::Constant(_),
-            ..
-        }
-        | ir::BlockExit::Switch {
-            value: ir::Operand::Constant(_),
-            ..
-        } => {
-            unreachable!("should be optimized in ir")
-        }
-
-        ir::BlockExit::ConditionalJump {
-            condition: ir::Operand::Register { .. },
-            arg_then,
-            arg_else,
-        } => {
-            let rs1 = match output.inst_allocs(insn).first() {
-                Some(allocation) => allocation_2_reg(*allocation, Register::T0),
-                None => {
-                    unreachable!()
-                    /*
-                    load_operand_to_reg(
-                        condition.clone(),
-                        Register::T0,
-                        &mut res,
-                        register_mp,
-                        float_mp,
-                    )
-                    */
-                }
-            };
-            let else_label = gen_jump_arg_or_new_block(
-                func_name,
-                bid,
-                arg_else,
-                register_mp,
-                float_mp,
-                temp_block,
-            );
-            res.push(asm::Instruction::BType {
-                instr: asm::BType::Beq,
-                rs1,
-                rs2: Register::Zero,
-                imm: else_label,
-            });
-            gen_jump_arg(func_name, arg_then, &mut res, register_mp, float_mp);
-        }
-
-        ir::BlockExit::Switch {
-            value: value @ ir::Operand::Register { .. },
-            default,
-            cases,
-        } => {
-            let dtype = value.dtype();
-            let rs1 = match output.inst_allocs(insn).first() {
-                Some(allocation) => allocation_2_reg(*allocation, Register::T0),
-                None => {
-                    unreachable!()
-                }
-            };
-            for (c, jump_arg) in cases {
-                let ir::Constant::Int { value, .. } = c else {
-                    unreachable!()
-                };
-                let data_size = DataSize::try_from(dtype.clone()).unwrap();
-                res.extend(mk_itype(
-                    IType::Addi(data_size),
-                    Register::T1,
-                    Register::Zero,
-                    *value as u64 & data_size.mask(),
-                ));
-                let then_label = gen_jump_arg_or_new_block(
-                    func_name,
-                    bid,
-                    jump_arg,
-                    register_mp,
-                    float_mp,
-                    temp_block,
-                );
-                res.push(asm::Instruction::BType {
-                    instr: asm::BType::Beq,
-                    rs1,
-                    rs2: Register::T1,
-                    imm: then_label,
-                })
-            }
-            gen_jump_arg(func_name, default, &mut res, register_mp, float_mp);
-        }
-
-        ir::BlockExit::Return { value } => {
-            match value.dtype() {
-                ir::Dtype::Unit { .. } => {}
-                ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                    match value {
-                        ir::Operand::Constant(c) => {
-                            load_constant_to_reg(c.clone(), Register::A0, &mut res, float_mp);
-                        }
-                        ir::Operand::Register { .. } => {
-                            // already in regalloc2
-                        }
-                    }
-                }
-                ir::Dtype::Float { .. } => {
-                    match value {
-                        ir::Operand::Constant(c) => {
-                            load_constant_to_reg(c.clone(), Register::A0, &mut res, float_mp);
-                        }
-                        ir::Operand::Register { .. } => {
-                            // already in regalloc2
-                        }
-                    }
-                }
-                ir::Dtype::Struct { .. } => match value {
-                    ir::Operand::Constant(ir::Constant::Undef { .. }) => {}
-                    ir::Operand::Register { rid, dtype } => match register_mp.get(rid).unwrap() {
-                        DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0: dest }) => {
-                            res.extend(mk_itype(IType::LD, Register::T3, Register::S0, 0));
-                            cp_to_indirect_target(
-                                (Register::S0, *dest),
-                                Register::T3,
-                                0,
-                                dtype.clone(),
-                                &mut res,
-                                source,
-                            );
-                        }
-                        DirectOrInDirect::InDirect(_) => unimplemented!(),
-                        _ => unreachable!(),
-                    },
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
-            }
-            res.push(asm::Instruction::Pseudo(Pseudo::Ret));
-        }
-        ir::BlockExit::Unreachable => unreachable!(),
-    }
-
-    res.extend(
-        output
-            .edits
-            .iter()
-            .filter_map(|(prog_point, edit)| {
-                if *prog_point == regalloc2::ProgPoint::after(insn) {
-                    Some(edit)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|x| gape.edit_2_instruction(x, &register_mp)),
-    );
 
     res
 }
@@ -4158,75 +2250,7 @@ fn clown<'a>(
 }
 
 // prepare args to jump block
-fn gen_jump_arg(
-    func_name: &str,
-    jump_arg: &ir::JumpArg,
-    res: &mut Vec<asm::Instruction>,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    float_mp: &mut FloatMp,
-) {
-    /*
-    let mut v: Vec<(Register, Register, ir::Dtype)> = Vec::new();
-    let mut after_cp_parallel: Vec<asm::Instruction> = Vec::new();
-    for (aid, operand) in jump_arg.args.iter().enumerate() {
-        match register_mp
-            .get(&RegisterId::Arg {
-                bid: jump_arg.bid,
-                aid,
-            })
-            .unwrap()
-        {
-            DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)) => match operand {
-                ir::Operand::Constant(_) => {
-                    store_operand_to_reg(
-                        operand.clone(),
-                        *dest_reg,
-                        &mut after_cp_parallel,
-                        register_mp,
-                        float_mp,
-                    );
-                }
-                ir::Operand::Register { rid, dtype } => match register_mp.get(rid).unwrap() {
-                    DirectOrInDirect::Direct(RegOrStack::Reg(src_reg)) => {
-                        if *src_reg != *dest_reg {
-                            v.push((*src_reg, *dest_reg, dtype.clone()));
-                        }
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                        after_cp_parallel.extend(mk_itype(
-                            IType::load(dtype.clone()),
-                            *dest_reg,
-                            Register::S0,
-                            *offset_to_s0 as u64,
-                        ));
-                    }
-                    DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-                    | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => {
-                        unreachable!()
-                    }
-                    DirectOrInDirect::InDirect(_) => todo!(),
-                },
-            },
-            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                operand_to_stack(
-                    operand.clone(),
-                    (Register::S0, *offset_to_s0 as u64),
-                    &mut after_cp_parallel,
-                    register_mp,
-                    float_mp,
-                );
-            }
-            DirectOrInDirect::Direct(RegOrStack::IntRegNotSure { .. })
-            | DirectOrInDirect::Direct(RegOrStack::FloatRegNotSure { .. }) => unreachable!(),
-            DirectOrInDirect::InDirect(_) => unreachable!(),
-        };
-    }
-
-    // cp_parallel first
-    res.extend(cp_parallel(v));
-    res.extend(after_cp_parallel);
-     */
-
+fn gen_jump_arg(func_name: &str, jump_arg: &ir::JumpArg, res: &mut Vec<asm::Instruction>) {
     res.push(asm::Instruction::Pseudo(Pseudo::J {
         offset: Label::new(func_name, jump_arg.bid),
     }));
@@ -4236,8 +2260,6 @@ fn gen_jump_arg_or_new_block(
     func_name: &str,
     from: BlockId,
     jump_arg: &ir::JumpArg,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    float_mp: &mut FloatMp,
     temp_block: &mut Vec<asm::Block>,
 ) -> Label {
     if jump_arg.args.is_empty() {
@@ -4250,7 +2272,7 @@ fn gen_jump_arg_or_new_block(
         });
         let res: &mut Vec<asm::Instruction> = &mut temp_block.last_mut().unwrap().instructions;
 
-        gen_jump_arg(func_name, jump_arg, res, register_mp, float_mp);
+        gen_jump_arg(func_name, jump_arg, res);
 
         label
     }
@@ -4391,31 +2413,30 @@ fn store_operand_to_reg(
     }
 }
 
-fn operand_to_stack(
-    operand: ir::Operand,
+fn constant_to_stack(
+    constant: ir::Constant,
     (target_register, target_base): (Register, u64),
     res: &mut Vec<asm::Instruction>,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
     float_mp: &mut FloatMp,
 ) {
     assert!(target_register == Register::Sp || target_register == Register::S0);
-    match operand.dtype() {
+    match constant.dtype() {
         ir::Dtype::Unit { .. } => unreachable!(),
         dtype @ (ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. }) => {
-            let reg = load_operand_to_reg(operand, Register::T0, res, register_mp, float_mp);
+            load_constant_to_reg(constant, Register::T0, res, float_mp);
             res.extend(mk_stype(
                 SType::store(dtype),
                 target_register,
-                reg,
+                Register::T0,
                 target_base,
             ));
         }
         dtype @ ir::Dtype::Float { .. } => {
-            let reg = load_operand_to_reg(operand, Register::FT0, res, register_mp, float_mp);
+            load_constant_to_reg(constant, Register::FT0, res, float_mp);
             res.extend(mk_stype(
                 SType::store(dtype),
                 target_register,
-                reg,
+                Register::FT0,
                 target_base,
             ));
         }

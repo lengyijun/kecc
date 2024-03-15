@@ -4,7 +4,7 @@
 
 #![deny(clippy::all)]
 // #![deny(rustdoc::all)]
-#![deny(warnings)]
+// #![deny(warnings)]
 // Tries to deny all rustc allow lints.
 // <https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html>
 #![deny(absolute_paths_not_starting_with_crate)]
@@ -45,7 +45,7 @@
 #![deny(unused_macro_rules)]
 #![deny(unused_qualifications)]
 #![deny(unused_results)]
-#![deny(dead_code)]
+// #![deny(dead_code)]
 // Allowed for more flexible variants.
 // #![deny(variant_size_differences)]
 
