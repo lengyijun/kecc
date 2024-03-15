@@ -10,23 +10,21 @@ use crate::asm::{
     TranslationUnit,
 };
 use crate::asmgen::helper::constant_2_allocation;
-use crate::ir::{
-    self, BlockId, Declaration, FunctionDefinition, FunctionSignature, HasDtype, RegisterId, Value,
-};
+use crate::ir::{self, BlockId, Declaration, FunctionSignature, HasDtype, RegisterId, Value};
 use crate::opt::deadcode::DeadcodeInner;
 use crate::opt::domtree::DomTree;
-use crate::{Deadcode, Optimize, Translate};
-use bimap::BiMap;
-use itertools::{iproduct, izip};
+use crate::{Optimize, Translate};
+
+use itertools::izip;
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
-use petgraph::visit::IntoNodeIdentifiers;
+
 use regalloc2::MachineEnv;
-use std::collections::{HashMap, HashSet, LinkedList};
+use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::ops::Deref;
 

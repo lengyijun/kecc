@@ -1,7 +1,4 @@
-use crate::{
-    ir::{Block, BlockExit, BlockId, JumpArg},
-    SimplifyCfgReach,
-};
+use crate::ir::{Block, BlockExit, BlockId, JumpArg};
 
 use super::helper::Gape;
 
