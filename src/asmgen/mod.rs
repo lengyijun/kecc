@@ -6268,6 +6268,24 @@ impl TranslationUnit {
                                 Some(instr)
                             }
                         }
+                        instr @ (asm::Instruction::RType {
+                            instr: RType::Add(_),
+                            rd,
+                            rs1: asm::Register::Zero,
+                            rs2: Some(x),
+                        }
+                        | asm::Instruction::RType {
+                            instr: RType::Add(_),
+                            rd,
+                            rs1: x,
+                            rs2: Some(asm::Register::Zero),
+                        }) => {
+                            if rd == x {
+                                None
+                            } else {
+                                Some(instr)
+                            }
+                        }
                         instr => Some(instr),
                     })
                     .cloned()
