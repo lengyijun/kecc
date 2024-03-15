@@ -1892,7 +1892,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg1 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
                 let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
@@ -1902,7 +1902,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::add(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -1910,7 +1910,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::add(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -1933,7 +1933,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
-                let reg1 = load_operand_to_reg(
+                let rs1 = load_operand_to_reg(
                     lhs.clone(),
                     Register::FT0,
                     &mut res,
@@ -1953,7 +1953,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fadd(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -1961,7 +1961,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fadd(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2048,7 +2048,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg1 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
                 let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
@@ -2058,7 +2058,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sub(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2066,7 +2066,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sub(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2089,7 +2089,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
-                let reg1 = load_operand_to_reg(
+                let rs1 = load_operand_to_reg(
                     lhs.clone(),
                     Register::FT0,
                     &mut res,
@@ -2109,7 +2109,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fsub(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2117,7 +2117,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fsub(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2141,7 +2141,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg1 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
                 let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
@@ -2151,7 +2151,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::mul(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2159,7 +2159,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::mul(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2182,7 +2182,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
-                let reg1 = load_operand_to_reg(
+                let rs1 = load_operand_to_reg(
                     lhs.clone(),
                     Register::FT0,
                     &mut res,
@@ -2202,7 +2202,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fmul(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2210,7 +2210,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fmul(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2234,7 +2234,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Int { is_signed, .. },
             } => {
-                let reg1 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
                 let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
@@ -2244,7 +2244,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::div(dtype.clone(), *is_signed),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2252,7 +2252,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::div(dtype.clone(), *is_signed),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2275,7 +2275,7 @@ fn translate_block(
                 rhs,
                 dtype: dtype @ ir::Dtype::Float { .. },
             } => {
-                let reg1 = load_operand_to_reg(
+                let rs1 = load_operand_to_reg(
                     lhs.clone(),
                     Register::FT0,
                     &mut res,
@@ -2295,7 +2295,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fdiv(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2303,7 +2303,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::fdiv(dtype.clone()),
                             rd: Register::FT0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2405,7 +2405,7 @@ fn translate_block(
                         ir::Dtype::Int { .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2422,7 +2422,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
@@ -2434,7 +2434,7 @@ fn translate_block(
                         ir::Dtype::Int { .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2451,7 +2451,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::Pseudo(Pseudo::Seqz {
@@ -2484,7 +2484,7 @@ fn translate_block(
                         ir::Dtype::Int { .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2501,7 +2501,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::Pseudo(Pseudo::Snez {
@@ -2519,7 +2519,7 @@ fn translate_block(
                         ir::Dtype::Int { .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2536,7 +2536,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::Pseudo(Pseudo::Snez {
@@ -2564,7 +2564,7 @@ fn translate_block(
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2583,7 +2583,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2591,7 +2591,7 @@ fn translate_block(
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
@@ -2610,7 +2610,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2624,7 +2624,7 @@ fn translate_block(
                         ir::Dtype::Float { .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::FT0,
                             &mut res,
@@ -2641,7 +2641,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                     }
@@ -2649,7 +2649,7 @@ fn translate_block(
                         ir::Dtype::Float { .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::FT0,
                             &mut res,
@@ -2666,7 +2666,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
@@ -2702,7 +2702,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -2714,7 +2714,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.push(asm::Instruction::IType {
@@ -2735,7 +2735,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -2747,7 +2747,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.push(asm::Instruction::IType {
@@ -2774,7 +2774,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::FT1,
                             &mut res,
@@ -2784,7 +2784,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.push(asm::Instruction::IType {
@@ -2805,7 +2805,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::FT1,
                             &mut res,
@@ -2815,7 +2815,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.push(asm::Instruction::IType {
@@ -2857,7 +2857,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -2869,7 +2869,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                     }
@@ -2884,7 +2884,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -2896,7 +2896,7 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.extend(mk_stype(
@@ -2917,7 +2917,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::FT1,
                             &mut res,
@@ -2927,7 +2927,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                     }
@@ -2942,7 +2942,7 @@ fn translate_block(
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             rhs.clone(),
                             Register::FT1,
                             &mut res,
@@ -2952,7 +2952,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::flt(dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg1,
+                            rs1,
                             rs2: Some(reg0),
                         });
                         res.extend(mk_stype(
@@ -2981,14 +2981,14 @@ fn translate_block(
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg0 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let reg2 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -3000,8 +3000,8 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::IType {
                             instr: IType::Xori,
@@ -3014,14 +3014,14 @@ fn translate_block(
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg0 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let reg2 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -3033,8 +3033,8 @@ fn translate_block(
                                 is_signed: *is_signed,
                             },
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.push(asm::Instruction::IType {
                             instr: IType::Xori,
@@ -3068,14 +3068,14 @@ fn translate_block(
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg0 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let reg2 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -3085,22 +3085,22 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::rem(dtype.clone(), *is_signed),
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     (
                         ir::Dtype::Int { is_signed, .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg0 = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             lhs.clone(),
                             Register::T0,
                             &mut res,
                             register_mp,
                             float_mp,
                         );
-                        let reg1 = load_operand_to_reg(
+                        let reg2 = load_operand_to_reg(
                             rhs.clone(),
                             Register::T1,
                             &mut res,
@@ -3110,8 +3110,8 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::rem(dtype.clone(), *is_signed),
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3130,9 +3130,9 @@ fn translate_block(
                 rhs,
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg0 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg1 =
+                let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3140,16 +3140,16 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sll(target_dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sll(target_dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3239,9 +3239,9 @@ fn translate_block(
                 rhs,
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg0 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg1 =
+                let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3249,16 +3249,16 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sra(target_dtype.clone()),
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::sra(target_dtype.clone()),
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3281,9 +3281,9 @@ fn translate_block(
                 rhs,
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg0 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg1 =
+                let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3291,16 +3291,16 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Xor,
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3323,9 +3323,9 @@ fn translate_block(
                 rhs,
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg0 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg1 =
+                let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3333,16 +3333,16 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::And,
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::And,
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3365,9 +3365,9 @@ fn translate_block(
                 rhs,
                 dtype: target_dtype @ ir::Dtype::Int { .. },
             } => {
-                let reg0 =
+                let rs1 =
                     load_operand_to_reg(lhs.clone(), Register::T0, &mut res, register_mp, float_mp);
-                let reg1 =
+                let reg2 =
                     load_operand_to_reg(rhs.clone(), Register::T1, &mut res, register_mp, float_mp);
 
                 match register_mp.get(&RegisterId::Temp { bid, iid }).unwrap() {
@@ -3375,16 +3375,16 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Or,
                             rd: *dest_reg,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                     }
                     DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
                         res.push(asm::Instruction::RType {
                             instr: asm::RType::Or,
                             rd: Register::T0,
-                            rs1: reg0,
-                            rs2: Some(reg1),
+                            rs1,
+                            rs2: Some(reg2),
                         });
                         res.extend(mk_stype(
                             SType::store(target_dtype.clone()),
@@ -3433,7 +3433,7 @@ fn translate_block(
                     },
                 value: operand @ ir::Operand::Constant(ir::Constant::Float { .. }),
             } => {
-                let reg0 = load_operand_to_reg(
+                let rs2 = load_operand_to_reg(
                     operand.clone(),
                     Register::FT0,
                     &mut res,
@@ -3445,7 +3445,7 @@ fn translate_block(
                 res.push(asm::Instruction::SType {
                     instr: SType::store((**inner).clone()),
                     rs1,
-                    rs2: reg0,
+                    rs2,
                     imm: Immediate::Value(0),
                 });
             }
@@ -3554,7 +3554,7 @@ fn translate_block(
                     rd: Register::T1,
                     symbol: Label(name.clone()),
                 }));
-                let reg0 = load_operand_to_reg(
+                let rs2 = load_operand_to_reg(
                     value.clone(),
                     Register::T0,
                     &mut res,
@@ -3564,7 +3564,7 @@ fn translate_block(
                 res.push(asm::Instruction::SType {
                     instr: SType::store(dtype.clone()),
                     rs1: Register::T1,
-                    rs2: reg0,
+                    rs2,
                     imm: Immediate::Value(0),
                 });
             }
@@ -4113,17 +4113,14 @@ fn translate_block(
                         },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs = load_operand_to_reg(
                             value.clone(),
                             Register::T0,
                             &mut res,
                             register_mp,
                             float_mp,
                         );
-                        res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                            rd: *dest_reg,
-                            rs: reg,
-                        }));
+                        res.push(asm::Instruction::Pseudo(Pseudo::Mv { rd: *dest_reg, rs }));
                     }
                     (
                         ir::Dtype::Int {
@@ -4177,7 +4174,7 @@ fn translate_block(
                         },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs = load_operand_to_reg(
                             value.clone(),
                             Register::T0,
                             &mut res,
@@ -4192,7 +4189,7 @@ fn translate_block(
                             (32, true) => {
                                 res.push(asm::Instruction::Pseudo(Pseudo::Mv {
                                     rd: *dest_reg,
-                                    rs: reg,
+                                    rs,
                                 }));
                             }
                             (32, false) => unimplemented!(),
@@ -4209,7 +4206,7 @@ fn translate_block(
                         },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs = load_operand_to_reg(
                             value.clone(),
                             Register::T0,
                             &mut res,
@@ -4225,13 +4222,13 @@ fn translate_block(
                             (32, false) => {
                                 res.push(asm::Instruction::Pseudo(Pseudo::Mv {
                                     rd: *dest_reg,
-                                    rs: reg,
+                                    rs,
                                 }));
                             }
                             (64, true) => {
                                 res.push(asm::Instruction::Pseudo(Pseudo::Mv {
                                     rd: *dest_reg,
-                                    rs: reg,
+                                    rs,
                                 }));
                             }
                             (64, false) => unimplemented!(),
@@ -4347,7 +4344,7 @@ fn translate_block(
                         },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs = load_operand_to_reg(
                             value.clone(),
                             Register::T0,
                             &mut res,
@@ -4358,7 +4355,7 @@ fn translate_block(
                             (8, true) => {
                                 res.push(asm::Instruction::Pseudo(Pseudo::Mv {
                                     rd: *dest_reg,
-                                    rs: reg,
+                                    rs,
                                 }));
                                 res.push(asm::Instruction::IType {
                                     instr: IType::Slli(DataSize::Double),
@@ -4447,7 +4444,7 @@ fn translate_block(
                         },
                         DirectOrInDirect::Direct(RegOrStack::Reg(dest_reg)),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs = load_operand_to_reg(
                             value.clone(),
                             Register::T0,
                             &mut res,
@@ -4462,7 +4459,7 @@ fn translate_block(
                             (32, true) => {
                                 res.push(asm::Instruction::Pseudo(Pseudo::SextW {
                                     rd: *dest_reg,
-                                    rs: reg,
+                                    rs,
                                 }));
                             }
                             (32, false) => unimplemented!(),
@@ -4511,7 +4508,7 @@ fn translate_block(
                         ir::Dtype::Float { .. },
                         DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }),
                     ) => {
-                        let reg = load_operand_to_reg(
+                        let rs1 = load_operand_to_reg(
                             value.clone(),
                             Register::FT0,
                             &mut res,
@@ -4521,7 +4518,7 @@ fn translate_block(
                         res.push(asm::Instruction::RType {
                             instr: RType::fcvt_float_to_int(from, to.clone()),
                             rd: Register::T0,
-                            rs1: reg,
+                            rs1,
                             rs2: None,
                         });
                         res.extend(mk_stype(
