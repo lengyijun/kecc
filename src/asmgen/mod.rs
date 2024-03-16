@@ -6244,46 +6244,41 @@ impl TranslationUnit {
         for function in self.functions.iter_mut() {
             let function = &mut function.body;
             for block in function.blocks.iter_mut() {
-                block.instructions = block
-                    .instructions
-                    .iter()
-                    .filter_map(|instr| match instr {
-                        instr @ asm::Instruction::Pseudo(Pseudo::Fmv { rd, rs, .. }) => {
-                            if rd == rs {
-                                None
-                            } else {
-                                Some(instr)
-                            }
+                block.instructions.retain(|instr| match instr {
+                    asm::Instruction::Pseudo(Pseudo::Fmv { rd, rs, .. }) => {
+                        if rd == rs {
+                            false
+                        } else {
+                            true
                         }
-                        instr @ asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }) => {
-                            if rd == rs {
-                                None
-                            } else {
-                                Some(instr)
-                            }
+                    }
+                    asm::Instruction::Pseudo(Pseudo::Mv { rd, rs }) => {
+                        if rd == rs {
+                            false
+                        } else {
+                            true
                         }
-                        instr @ (asm::Instruction::RType {
-                            instr: RType::Add(_),
-                            rd,
-                            rs1: asm::Register::Zero,
-                            rs2: Some(x),
+                    }
+                    asm::Instruction::RType {
+                        instr: RType::Add(_),
+                        rd,
+                        rs1: asm::Register::Zero,
+                        rs2: Some(x),
+                    }
+                    | asm::Instruction::RType {
+                        instr: RType::Add(_),
+                        rd,
+                        rs1: x,
+                        rs2: Some(asm::Register::Zero),
+                    } => {
+                        if rd == x {
+                            false
+                        } else {
+                            true
                         }
-                        | asm::Instruction::RType {
-                            instr: RType::Add(_),
-                            rd,
-                            rs1: x,
-                            rs2: Some(asm::Register::Zero),
-                        }) => {
-                            if rd == x {
-                                None
-                            } else {
-                                Some(instr)
-                            }
-                        }
-                        instr => Some(instr),
-                    })
-                    .cloned()
-                    .collect();
+                    }
+                    _ => true,
+                });
             }
         }
     }
