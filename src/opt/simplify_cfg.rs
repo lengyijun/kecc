@@ -224,7 +224,7 @@ impl Instruction {
             ir::Instruction::Store { ptr, value } => Box::new(once(ptr).chain(once(value))),
             ir::Instruction::Load { ptr } => Box::new(once(ptr)),
             ir::Instruction::Call { callee, args, .. } => {
-                Box::new(once(callee).chain(args.iter_mut()))
+                Box::new(args.iter_mut().chain(once(callee)))
             }
             ir::Instruction::TypeCast { value, .. } => Box::new(once(value)),
             ir::Instruction::GetElementPtr { ptr, offset, .. } => {
@@ -240,7 +240,7 @@ impl Instruction {
             ir::Instruction::UnaryOp { operand, .. } => Box::new(once(operand)),
             ir::Instruction::Store { ptr, value } => Box::new(once(ptr).chain(once(value))),
             ir::Instruction::Load { ptr } => Box::new(once(ptr)),
-            ir::Instruction::Call { callee, args, .. } => Box::new(once(callee).chain(args.iter())),
+            ir::Instruction::Call { callee, args, .. } => Box::new(args.iter().chain(once(callee))),
             ir::Instruction::TypeCast { value, .. } => Box::new(once(value)),
             ir::Instruction::GetElementPtr { ptr, offset, .. } => {
                 Box::new(once(ptr).chain(once(offset)))
