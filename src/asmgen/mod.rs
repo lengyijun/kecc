@@ -730,7 +730,7 @@ fn translate_block(
     let block = &gape.blocks[&bid];
     let mut res = vec![];
 
-    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BeforeFirst)).unwrap();
+    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockEntry)).unwrap();
     res.extend(
         output
             .edits

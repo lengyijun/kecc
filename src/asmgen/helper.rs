@@ -93,7 +93,9 @@ impl TryInto<regalloc2::RegClass> for Dtype {
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum Yank {
-    BeforeFirst,
+    /// init_block: deal with arguments
+    /// otherwise: do nothing
+    BlockEntry,
     Instruction(usize),
     AllocateConstBeforeJump,
     BlockExit,
@@ -133,7 +135,7 @@ impl<'a> Gape<'a> {
 
         for (&bid, block) in blocks {
             inst_mp
-                .insert_no_overwrite((bid, Yank::BeforeFirst), insn)
+                .insert_no_overwrite((bid, Yank::BlockEntry), insn)
                 .unwrap();
             insn = insn.next();
             for offset in 0..block.instructions.len() {
@@ -351,7 +353,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         regalloc2::InstRange::new(
             *self
                 .inst_mp
-                .get_by_left(&(block_id, Yank::BeforeFirst))
+                .get_by_left(&(block_id, Yank::BlockEntry))
                 .unwrap(),
             self.inst_mp
                 .get_by_left(&(block_id, Yank::BlockExit))
@@ -403,7 +405,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BeforeFirst | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
+            Yank::BlockEntry | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
             Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
@@ -414,7 +416,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
         let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BeforeFirst | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
+            Yank::BlockEntry | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
             Yank::BlockExit => match self.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
@@ -457,7 +459,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
         let block = &self.blocks[&bid];
 
         match yank {
-            Yank::BeforeFirst => {
+            Yank::BlockEntry => {
                 if self.entry_block() == *self.block_mp.get_by_left(&bid).unwrap() {
                     block
                         .phinodes
@@ -694,7 +696,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 | ir::Instruction::Load { .. } => regalloc2::PRegSet::empty(),
                 ir::Instruction::Call { .. } => whole_pregset(),
             },
-            Yank::BeforeFirst | Yank::AllocateConstBeforeJump | Yank::BlockExit => {
+            Yank::BlockEntry | Yank::AllocateConstBeforeJump | Yank::BlockExit => {
                 regalloc2::PRegSet::empty()
             }
         }
