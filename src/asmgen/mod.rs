@@ -3614,13 +3614,12 @@ fn translate_block(
                             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(
                                 target_reg,
                             ))),
-                            ir::Operand::Constant(_),
+                            ir::Operand::Constant(c),
                         ) => {
-                            store_operand_to_reg(
-                                operand.clone(),
+                            load_constant_to_reg(
+                                c.clone(),
                                 target_reg,
                                 &mut after_cp_parallel,
-                                register_mp,
                                 float_mp,
                             );
                         }
