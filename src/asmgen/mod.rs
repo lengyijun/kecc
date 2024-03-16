@@ -730,7 +730,7 @@ fn translate_block(
     let block = &gape.blocks[&bid];
     let mut res = vec![];
 
-    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockEntry)).unwrap();
+    let insn = *gape.inst_mp.get_by_left(&Yank::BlockEntry(bid)).unwrap();
     res.extend(
         output
             .edits
@@ -762,7 +762,7 @@ fn translate_block(
         let rid = RegisterId::Temp { bid, iid };
         let insn = *gape
             .inst_mp
-            .get_by_left(&(bid, Yank::Instruction(iid)))
+            .get_by_left(&Yank::Instruction(bid, iid))
             .unwrap();
 
         // .next().is_none() means this instruction is striped in helper.rs
@@ -770,7 +770,7 @@ fn translate_block(
             .inst_allocs(
                 *gape
                     .inst_mp
-                    .get_by_left(&(bid, Yank::Instruction(iid)))
+                    .get_by_left(&(Yank::Instruction(bid, iid)))
                     .unwrap(),
             )
             .iter()
@@ -3912,7 +3912,7 @@ fn translate_block(
     // no edit before/after
     let insn = *gape
         .inst_mp
-        .get_by_left(&(bid, Yank::AllocateConstBeforeJump))
+        .get_by_left(&Yank::AllocateConstBeforeJump(bid))
         .unwrap();
 
     res.extend(
@@ -3960,7 +3960,7 @@ fn translate_block(
         constant_v.push(v);
     }
 
-    let insn = *gape.inst_mp.get_by_left(&(bid, Yank::BlockExit)).unwrap();
+    let insn = *gape.inst_mp.get_by_left(&Yank::BlockExit(bid)).unwrap();
     res.extend(
         output
             .edits

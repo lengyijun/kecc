@@ -91,14 +91,15 @@ impl TryInto<regalloc2::RegClass> for Dtype {
     }
 }
 
+/// Yank is bimap to regalloc2::Inst
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum Yank {
     /// init_block: deal with arguments
     /// otherwise: do nothing
-    BlockEntry,
-    Instruction(usize),
-    AllocateConstBeforeJump,
-    BlockExit,
+    BlockEntry(BlockId),
+    Instruction(BlockId, usize),
+    AllocateConstBeforeJump(BlockId),
+    BlockExit(BlockId),
 }
 
 #[derive(Debug)]
@@ -118,7 +119,7 @@ pub struct Gape<'a> {
     pub pred_mp: Frozen<BTreeMap<BlockId, Vec<BlockId>>>,
     /// abi of current function
     pub abi: FunctionAbi,
-    pub inst_mp: Frozen<BiMap<(BlockId, Yank), regalloc2::Inst>>,
+    pub inst_mp: Frozen<BiMap<Yank, regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
     pub constant_in_jumparg_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
@@ -127,30 +128,28 @@ pub struct Gape<'a> {
 }
 
 impl<'a> Gape<'a> {
-    fn init_inst_mp(
-        blocks: &BTreeMap<BlockId, ir::Block>,
-    ) -> BiMap<(BlockId, Yank), regalloc2::Inst> {
-        let mut inst_mp: BiMap<(BlockId, Yank), regalloc2::Inst> = BiMap::new();
+    fn init_inst_mp(blocks: &BTreeMap<BlockId, ir::Block>) -> BiMap<Yank, regalloc2::Inst> {
+        let mut inst_mp: BiMap<Yank, regalloc2::Inst> = BiMap::new();
         let mut insn = regalloc2::Inst::new(0);
 
         for (&bid, block) in blocks {
             inst_mp
-                .insert_no_overwrite((bid, Yank::BlockEntry), insn)
+                .insert_no_overwrite(Yank::BlockEntry(bid), insn)
                 .unwrap();
             insn = insn.next();
             for offset in 0..block.instructions.len() {
                 inst_mp
-                    .insert_no_overwrite((bid, Yank::Instruction(offset)), insn)
+                    .insert_no_overwrite(Yank::Instruction(bid, offset), insn)
                     .unwrap();
                 insn = insn.next();
             }
             inst_mp
-                .insert_no_overwrite((bid, Yank::AllocateConstBeforeJump), insn)
+                .insert_no_overwrite(Yank::AllocateConstBeforeJump(bid), insn)
                 .unwrap();
             insn = insn.next();
 
             inst_mp
-                .insert_no_overwrite((bid, Yank::BlockExit), insn)
+                .insert_no_overwrite(Yank::BlockExit(bid), insn)
                 .unwrap();
             insn = insn.next();
         }
@@ -353,10 +352,10 @@ impl<'a> regalloc2::Function for Gape<'a> {
         regalloc2::InstRange::new(
             *self
                 .inst_mp
-                .get_by_left(&(block_id, Yank::BlockEntry))
+                .get_by_left(&Yank::BlockEntry(block_id))
                 .unwrap(),
             self.inst_mp
-                .get_by_left(&(block_id, Yank::BlockExit))
+                .get_by_left(&Yank::BlockExit(block_id))
                 .unwrap()
                 .next(),
         )
@@ -403,10 +402,12 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
-        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
+        let yank = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BlockEntry | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
-            Yank::BlockExit => match self.blocks[&bid].exit {
+            Yank::BlockEntry(_) | Yank::Instruction(_, _) | Yank::AllocateConstBeforeJump(_) => {
+                false
+            }
+            Yank::BlockExit(bid) => match self.blocks[&bid].exit {
                 ir::BlockExit::Return { .. } => true,
                 _ => false,
             },
@@ -414,10 +415,12 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn is_branch(&self, insn: regalloc2::Inst) -> bool {
-        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
+        let yank = self.inst_mp.get_by_right(&insn).unwrap();
         match yank {
-            Yank::BlockEntry | Yank::Instruction(_) | Yank::AllocateConstBeforeJump => false,
-            Yank::BlockExit => match self.blocks[&bid].exit {
+            Yank::BlockEntry(_) | Yank::Instruction(_, _) | Yank::AllocateConstBeforeJump(_) => {
+                false
+            }
+            Yank::BlockExit(bid) => match self.blocks[&bid].exit {
                 ir::BlockExit::Jump { .. } => true,
                 ir::BlockExit::ConditionalJump { .. } => true,
                 ir::BlockExit::Switch { .. } => true,
@@ -433,12 +436,11 @@ impl<'a> regalloc2::Function for Gape<'a> {
         insn: regalloc2::Inst,
         succ_idx: usize,
     ) -> &[regalloc2::VReg] {
-        let (bid, yank) = self.inst_mp.get_by_right(&insn).unwrap();
         let block_id_1: BlockId = *self.block_mp.get_by_right(&block).unwrap();
-        assert_eq!(block_id_1, *bid);
-        let Yank::BlockExit = yank else {
+        let Yank::BlockExit(bid) = self.inst_mp.get_by_right(&insn).unwrap() else {
             unreachable!()
         };
+        assert_eq!(block_id_1, *bid);
         let Some(jump_arg) = self.blocks[&bid].exit.walk_jump_args_1().nth(succ_idx) else {
             unreachable!()
         };
@@ -455,11 +457,11 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn inst_operands(&self, insn: regalloc2::Inst) -> &[regalloc2::Operand] {
-        let (bid, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
-        let block = &self.blocks[&bid];
+        let yank = *self.inst_mp.get_by_right(&insn).unwrap();
 
         match yank {
-            Yank::BlockEntry => {
+            Yank::BlockEntry(bid) => {
+                let block = &self.blocks[&bid];
                 if self.entry_block() == *self.block_mp.get_by_left(&bid).unwrap() {
                     block
                         .phinodes
@@ -497,7 +499,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     &[]
                 }
             }
-            Yank::AllocateConstBeforeJump => self.constant_in_jumparg_mp[&bid]
+            Yank::AllocateConstBeforeJump(bid) => self.constant_in_jumparg_mp[&bid]
                 .iter()
                 .flatten()
                 .map(|&vreg| {
@@ -510,8 +512,9 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 })
                 .collect_vec()
                 .leak(),
-            Yank::BlockExit => {
+            Yank::BlockExit(bid) => {
                 let mut v: Vec<_> = Vec::new();
+                let block = &self.blocks[&bid];
                 match &block.exit {
                     BlockExit::Jump { .. } => v.leak(),
                     BlockExit::ConditionalJump {
@@ -585,7 +588,8 @@ impl<'a> regalloc2::Function for Gape<'a> {
                     _ => &[],
                 }
             }
-            Yank::Instruction(iid) => {
+            Yank::Instruction(bid, iid) => {
+                let block = &self.blocks[&bid];
                 let instruction: &ir::Instruction = &block.instructions[iid];
                 let mut v: Vec<regalloc2::Operand> = Vec::new();
 
@@ -683,20 +687,22 @@ impl<'a> regalloc2::Function for Gape<'a> {
     }
 
     fn inst_clobbers(&self, insn: regalloc2::Inst) -> regalloc2::PRegSet {
-        let (block_id, yank) = *self.inst_mp.get_by_right(&insn).unwrap();
-        let block = &self.blocks[&block_id.into()];
+        let yank = *self.inst_mp.get_by_right(&insn).unwrap();
+        // let block = &self.blocks[&block_id.into()];
         match yank {
-            Yank::Instruction(offset) => match block.instructions[offset].deref() {
-                ir::Instruction::TypeCast { .. }
-                | ir::Instruction::GetElementPtr { .. }
-                | ir::Instruction::Store { .. }
-                | ir::Instruction::UnaryOp { .. }
-                | ir::Instruction::BinOp { .. }
-                | ir::Instruction::Nop
-                | ir::Instruction::Load { .. } => regalloc2::PRegSet::empty(),
-                ir::Instruction::Call { .. } => whole_pregset(),
-            },
-            Yank::BlockEntry | Yank::AllocateConstBeforeJump | Yank::BlockExit => {
+            Yank::Instruction(bid, offset) => {
+                match self.blocks[&bid.into()].instructions[offset].deref() {
+                    ir::Instruction::TypeCast { .. }
+                    | ir::Instruction::GetElementPtr { .. }
+                    | ir::Instruction::Store { .. }
+                    | ir::Instruction::UnaryOp { .. }
+                    | ir::Instruction::BinOp { .. }
+                    | ir::Instruction::Nop
+                    | ir::Instruction::Load { .. } => regalloc2::PRegSet::empty(),
+                    ir::Instruction::Call { .. } => whole_pregset(),
+                }
+            }
+            Yank::BlockEntry(_) | Yank::AllocateConstBeforeJump(_) | Yank::BlockExit(_) => {
                 regalloc2::PRegSet::empty()
             }
         }
