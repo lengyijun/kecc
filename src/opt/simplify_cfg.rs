@@ -277,6 +277,13 @@ impl Instruction {
         };
         Box::new(self.walk_operand().filter_map(f))
     }
+
+    pub fn walk_constant(&self) -> Box<dyn Iterator<Item = &Constant> + '_> {
+        Box::new(self.walk_operand().filter_map(|operand| match operand {
+            Operand::Constant(c) => Some(c),
+            Operand::Register { .. } => None,
+        }))
+    }
 }
 
 impl BlockExit {
