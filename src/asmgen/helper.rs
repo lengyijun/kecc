@@ -122,6 +122,7 @@ pub struct Gape<'a> {
     pub inst_mp: Frozen<BiMap<Yank, regalloc2::Inst>>,
     pub reg_mp: Frozen<BiMap<RegisterId, regalloc2::VReg>>,
     pub block_mp: Frozen<BiMap<BlockId, regalloc2::Block>>,
+    /// only make sense in ConditionalJump/Switch
     pub constant_in_jumparg_mp: Frozen<BTreeMap<BlockId, Vec<Vec<regalloc2::VReg>>>>,
 
     num_vregs: usize,
