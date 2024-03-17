@@ -758,6 +758,50 @@ fn translate_block(
                     ir::Instruction::BinOp {
                         op: BinaryOperator::Minus,
                         lhs,
+                        rhs: ir::Operand::Constant(c),
+                        dtype: dtype @ ir::Dtype::Int { .. },
+                    } => {
+                        let value: u64 = match c {
+                            ir::Constant::Int {
+                                value,
+                                is_signed: true,
+                                ..
+                            } => {
+                                let value: i128 = *value as i128;
+                                let value: i128 = -value;
+                                let value: i64 = value.try_into().unwrap();
+                                value as u64
+                            }
+                            ir::Constant::Int {
+                                value,
+                                is_signed: false,
+                                ..
+                            } => {
+                                let value: i128 = (*value).try_into().unwrap();
+                                let value: i128 = -value;
+                                let value: i64 = value.try_into().unwrap();
+                                value as u64
+                            }
+                            _ => unreachable!(),
+                        };
+                        let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
+                        let data_size = DataSize::try_from(dtype.clone()).unwrap();
+                        match allocations.last().unwrap().as_reg() {
+                            Some(dest_reg) => {
+                                res.extend(mk_itype(
+                                    IType::Addi(data_size),
+                                    dest_reg.into(),
+                                    rs1,
+                                    value & data_size.mask(),
+                                ));
+                            }
+                            None => todo!(),
+                        }
+                    }
+
+                    ir::Instruction::BinOp {
+                        op: BinaryOperator::Minus,
+                        lhs,
                         rhs,
                         dtype: dtype @ ir::Dtype::Int { .. },
                     } => {
@@ -1140,7 +1184,6 @@ fn translate_block(
                             },
                             _ => unreachable!(),
                         }
-                        todo!()
                     }
 
                     ir::Instruction::BinOp {
@@ -1813,7 +1856,6 @@ fn translate_block(
                                         float_mp,
                                     );
                                 }
-                                // TODO: below
                                 (
                                     ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                                         RegOrStack::Reg(target_reg),
