@@ -3945,9 +3945,7 @@ fn translate_block(
     // assign constant to registers
     // TODO: better way is to assign in each JumpArg
     let mut constant_allocation_iter = output.inst_allocs(insn).iter();
-    let mut constant_v = Vec::new();
     for jump_arg in block.exit.walk_jump_args_1() {
-        let mut v = Vec::new();
         for c in jump_arg.walk_constant_arg() {
             let reg = constant_2_allocation(
                 c.clone(),
@@ -3955,9 +3953,7 @@ fn translate_block(
                 &mut res,
                 float_mp,
             );
-            v.push(reg);
         }
-        constant_v.push(v);
     }
 
     let insn = *gape.inst_mp.get_by_left(&Yank::BlockExit(bid)).unwrap();
