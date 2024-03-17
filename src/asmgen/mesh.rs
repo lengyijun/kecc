@@ -1,6 +1,30 @@
 use std::iter::{empty, once};
 
-use crate::asm::{Instruction, Pseudo, Register};
+use crate::asm::{self, Block, Instruction, Label, Pseudo, Register};
+
+impl asm::Function {
+    pub fn walk_label(&self) -> Box<dyn Iterator<Item = &Label> + '_> {
+        Box::new(self.blocks.iter().flat_map(Block::walk_label))
+    }
+
+    pub fn walk_label_mut(&mut self) -> Box<dyn Iterator<Item = &mut Label> + '_> {
+        Box::new(self.blocks.iter_mut().flat_map(Block::walk_label_mut))
+    }
+}
+
+impl Block {
+    pub fn walk_label(&self) -> Box<dyn Iterator<Item = &Label> + '_> {
+        Box::new(self.instructions.iter().flat_map(Instruction::walk_label))
+    }
+
+    pub fn walk_label_mut(&mut self) -> Box<dyn Iterator<Item = &mut Label> + '_> {
+        Box::new(
+            self.instructions
+                .iter_mut()
+                .flat_map(Instruction::walk_label_mut),
+        )
+    }
+}
 
 impl Instruction {
     pub fn walk_register(&self) -> Box<dyn Iterator<Item = Register> + '_> {
@@ -37,6 +61,28 @@ impl Instruction {
             Instruction::Pseudo(pseudo) => pseudo.walk_register(),
         }
     }
+
+    pub fn walk_label(&self) -> Box<dyn Iterator<Item = &Label> + '_> {
+        match self {
+            Instruction::RType { .. }
+            | Instruction::IType { .. }
+            | Instruction::SType { .. }
+            | Instruction::UType { .. } => Box::new(empty()),
+            Instruction::BType { imm, .. } => Box::new(once(imm)),
+            Instruction::Pseudo(pseudo) => pseudo.walk_label(),
+        }
+    }
+
+    pub fn walk_label_mut(&mut self) -> Box<dyn Iterator<Item = &mut Label> + '_> {
+        match self {
+            Instruction::RType { .. }
+            | Instruction::IType { .. }
+            | Instruction::SType { .. }
+            | Instruction::UType { .. } => Box::new(empty()),
+            Instruction::BType { imm, .. } => Box::new(once(imm)),
+            Instruction::Pseudo(pseudo) => pseudo.walk_label_mut(),
+        }
+    }
 }
 
 impl Pseudo {
@@ -69,6 +115,42 @@ impl Pseudo {
             Pseudo::Jr { rs } | Pseudo::Jalr { rs } => Box::new(once(*rs)),
             Pseudo::Ret => Box::new(empty()),
             Pseudo::J { offset: _offset } | Pseudo::Call { offset: _offset } => Box::new(empty()),
+        }
+    }
+
+    pub fn walk_label(&self) -> Box<dyn Iterator<Item = &Label> + '_> {
+        match self {
+            Pseudo::La { rd, symbol } => Box::new(once(symbol)),
+            Pseudo::J { offset } | Pseudo::Call { offset } => Box::new(once(offset)),
+            Pseudo::Li { .. }
+            | Pseudo::Mv { .. }
+            | Pseudo::Fmv { .. }
+            | Pseudo::Neg { .. }
+            | Pseudo::SextW { .. }
+            | Pseudo::Seqz { .. }
+            | Pseudo::Snez { .. }
+            | Pseudo::Fneg { .. }
+            | Pseudo::Jr { .. }
+            | Pseudo::Jalr { .. }
+            | Pseudo::Ret => Box::new(empty()),
+        }
+    }
+
+    pub fn walk_label_mut(&mut self) -> Box<dyn Iterator<Item = &mut Label> + '_> {
+        match self {
+            Pseudo::La { rd, symbol } => Box::new(once(symbol)),
+            Pseudo::J { offset } | Pseudo::Call { offset } => Box::new(once(offset)),
+            Pseudo::Li { .. }
+            | Pseudo::Mv { .. }
+            | Pseudo::Fmv { .. }
+            | Pseudo::Neg { .. }
+            | Pseudo::SextW { .. }
+            | Pseudo::Seqz { .. }
+            | Pseudo::Snez { .. }
+            | Pseudo::Fneg { .. }
+            | Pseudo::Jr { .. }
+            | Pseudo::Jalr { .. }
+            | Pseudo::Ret => Box::new(empty()),
         }
     }
 }
