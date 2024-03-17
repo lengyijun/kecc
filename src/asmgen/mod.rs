@@ -1801,7 +1801,20 @@ fn translate_block(
                                 }));
                                 Register::T0
                             }
-                            ptr @ ir::Operand::Register { .. } => {
+                            ir::Operand::Register {
+                                rid: rid @ ir::RegisterId::Local { .. },
+                                dtype,
+                            } => {
+                                let offset_to_s0 = stack_mp[rid];
+                                res.extend(mk_itype(
+                                    IType::load(dtype.clone()),
+                                    Register::T1,
+                                    Register::S0,
+                                    offset_to_s0 as u64,
+                                ));
+                                Register::T1
+                            }
+                            ir::Operand::Register { .. } => {
                                 allocations.next().unwrap().as_reg().unwrap().into()
                             }
                             _ => unreachable!(),
