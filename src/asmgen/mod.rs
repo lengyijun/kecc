@@ -1913,11 +1913,30 @@ fn translate_block(
                                     )),
                                     ir::Operand::Register { rid, dtype },
                                 ) => {
-                                    // do nothing
-                                    // regalloc2 do it
-                                    let reg: Register =
-                                        allocations.next().unwrap().as_reg().unwrap().into();
-                                    assert_eq!(reg, target_reg);
+                                    match gape.reg_mp.get_by_left(rid) {
+                                        Some(_) => {
+                                            // do nothing
+                                            // regalloc2 do it
+                                            let reg: Register = allocations
+                                                .next()
+                                                .unwrap()
+                                                .as_reg()
+                                                .unwrap()
+                                                .into();
+                                            assert_eq!(reg, target_reg);
+                                        }
+                                        None => {
+                                            // rid is RegisterId::Local{..}
+
+                                            let offset_to_s0 = stack_mp[rid];
+                                            res.extend(mk_itype(
+                                                IType::load(dtype.clone()),
+                                                target_reg,
+                                                Register::S0,
+                                                offset_to_s0 as u64,
+                                            ));
+                                        }
+                                    }
                                 }
                                 (
                                     ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(

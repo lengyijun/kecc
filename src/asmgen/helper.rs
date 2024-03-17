@@ -611,14 +611,21 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                         RegOrStack::Reg(target_reg),
                                     )),
                                     ir::Operand::Register { rid, dtype },
-                                ) => {
-                                    v.push(regalloc2::Operand::new(
-                                        *self.reg_mp.get_by_left(rid).unwrap(),
-                                        regalloc2::OperandConstraint::FixedReg(target_reg.into()),
-                                        regalloc2::OperandKind::Use,
-                                        regalloc2::OperandPos::Early,
-                                    ));
-                                }
+                                ) => match self.reg_mp.get_by_left(rid) {
+                                    Some(vreg) => {
+                                        v.push(regalloc2::Operand::new(
+                                            *vreg,
+                                            regalloc2::OperandConstraint::FixedReg(
+                                                target_reg.into(),
+                                            ),
+                                            regalloc2::OperandKind::Use,
+                                            regalloc2::OperandPos::Early,
+                                        ));
+                                    }
+                                    None => {
+                                        // rid is RegisterId::Local{..}
+                                    }
+                                },
                                 (
                                     ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(
                                         RegOrStack::Stack { offset_to_s0 },
@@ -699,7 +706,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                     regalloc2::OperandConstraint::Any,
                                     regalloc2::OperandKind::Use,
                                     regalloc2::OperandPos::Late, // bad: jalr a0
-                                                                     // good: jalr s0
+                                                                 // good: jalr s0
                                 ));
                             }
                         }
