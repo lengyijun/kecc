@@ -2157,7 +2157,9 @@ fn translate_block(
             Yank::BlockExit(_) => {
                 match &block.exit {
                     ir::BlockExit::Jump { arg } => {
-                        gen_jump_arg(func_name, arg, &mut res);
+                        res.push(asm::Instruction::Pseudo(Pseudo::J {
+                            offset: Label::new(func_name, arg.bid),
+                        }));
                     }
                     ir::BlockExit::ConditionalJump {
                         condition: ir::Operand::Constant(_),
@@ -2189,7 +2191,9 @@ fn translate_block(
                             rs2: Register::Zero,
                             imm: else_label,
                         });
-                        gen_jump_arg(func_name, arg_then, &mut res);
+                        res.push(asm::Instruction::Pseudo(Pseudo::J {
+                            offset: Label::new(func_name, arg_then.bid),
+                        }));
                     }
 
                     ir::BlockExit::Switch {
@@ -2224,7 +2228,9 @@ fn translate_block(
                                 imm: then_label,
                             })
                         }
-                        gen_jump_arg(func_name, default, &mut res);
+                        res.push(asm::Instruction::Pseudo(Pseudo::J {
+                            offset: Label::new(func_name, default.bid),
+                        }));
                     }
 
                     ir::BlockExit::Return { value } => {
@@ -2330,13 +2336,6 @@ fn clown<'a>(
     }
 }
 
-// prepare args to jump block
-fn gen_jump_arg(func_name: &str, jump_arg: &ir::JumpArg, res: &mut Vec<asm::Instruction>) {
-    res.push(asm::Instruction::Pseudo(Pseudo::J {
-        offset: Label::new(func_name, jump_arg.bid),
-    }));
-}
-
 fn gen_jump_arg_or_new_block(
     func_name: &str,
     from: BlockId,
@@ -2349,12 +2348,10 @@ fn gen_jump_arg_or_new_block(
         let label = Label(format!(".{func_name}_{from}_{}", jump_arg.bid));
         temp_block.push(asm::Block {
             label: Some(label.clone()),
-            instructions: vec![],
+            instructions: vec![asm::Instruction::Pseudo(Pseudo::J {
+                offset: Label::new(func_name, jump_arg.bid),
+            })],
         });
-        let res: &mut Vec<asm::Instruction> = &mut temp_block.last_mut().unwrap().instructions;
-
-        gen_jump_arg(func_name, jump_arg, res);
-
         label
     }
 }
