@@ -10,7 +10,7 @@ use itertools::{izip, Itertools};
 
 use crate::{
     asm::{self, DataSize, Pseudo, Register, RegisterType},
-    asmgen::{clown, DirectOrInDirect, RegOrStack, RegisterCouple},
+    asmgen::{clown, DirectOrInDirect, RegOrStack},
     ir::{
         self, BlockExit, BlockId, Constant, Dtype, FunctionDefinition, HasDtype, JumpArg, Named,
         Operand, RegisterId,
@@ -660,9 +660,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                 },
                                 (
                                     ParamAlloc::PrimitiveType(DirectOrInDirect::InDirect(
-                                        RegOrStack::Stack {
-                                            offset_to_s0: target_offset,
-                                        },
+                                        RegOrStack::Stack { offset_to_s0 },
                                     )),
                                     ir::Operand::Register { rid, .. },
                                 ) => match self.reg_mp.get_by_left(rid) {

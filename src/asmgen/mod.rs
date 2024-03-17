@@ -13,19 +13,14 @@ use crate::asmgen::helper::constant_2_allocation;
 use crate::ir::{self, BlockId, Declaration, FunctionSignature, HasDtype, RegisterId, Value};
 use crate::opt::deadcode::DeadcodeInner;
 use crate::opt::domtree::DomTree;
-use crate::{Deadcode, Optimize, Translate};
+use crate::{Optimize, Translate};
 use bimap::{BiMap, Overwritten};
-use itertools::{iproduct, izip};
+use itertools::izip;
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
-use linked_hash_map::LinkedHashMap;
 use ordered_float::OrderedFloat;
 use regalloc2::Function;
-
-use petgraph::graph::NodeIndex;
-use petgraph::stable_graph::StableGraph;
-use petgraph::visit::IntoNodeIdentifiers;
 use regalloc2::MachineEnv;
-use std::collections::{HashMap, HashSet, LinkedList};
+use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::ops::Deref;
 
@@ -945,7 +940,7 @@ fn translate_block(
                         op: BinaryOperator::Equals,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -970,7 +965,7 @@ fn translate_block(
                         op: BinaryOperator::NotEquals,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -995,7 +990,7 @@ fn translate_block(
                         op: BinaryOperator::Less,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1017,19 +1012,17 @@ fn translate_block(
                                 }
                                 None => todo!(),
                             },
-                            ir::Dtype::Float { width, is_const } => {
-                                match allocations.next().unwrap().as_reg() {
-                                    Some(dest_reg) => {
-                                        res.push(asm::Instruction::RType {
-                                            instr: asm::RType::flt(lhs.dtype()),
-                                            rd: dest_reg.into(),
-                                            rs1,
-                                            rs2: Some(rs2),
-                                        });
-                                    }
-                                    None => todo!(),
+                            ir::Dtype::Float { .. } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::flt(lhs.dtype()),
+                                        rd: dest_reg.into(),
+                                        rs1,
+                                        rs2: Some(rs2),
+                                    });
                                 }
-                            }
+                                None => todo!(),
+                            },
                             _ => unreachable!(),
                         }
                     }
@@ -1038,7 +1031,7 @@ fn translate_block(
                         op: BinaryOperator::LessOrEqual,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs0: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1065,27 +1058,25 @@ fn translate_block(
                                 }
                                 None => todo!(),
                             },
-                            ir::Dtype::Float { width, is_const } => {
-                                match allocations.next().unwrap().as_reg() {
-                                    Some(dest_reg) => {
-                                        let rd = dest_reg.into();
+                            ir::Dtype::Float { .. } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    let rd = dest_reg.into();
 
-                                        res.push(asm::Instruction::RType {
-                                            instr: asm::RType::flt(lhs.dtype()),
-                                            rd,
-                                            rs1,
-                                            rs2: Some(rs0),
-                                        });
-                                        res.push(asm::Instruction::IType {
-                                            instr: IType::Xori,
-                                            rd,
-                                            rs1: rd,
-                                            imm: Immediate::Value(1),
-                                        });
-                                    }
-                                    None => todo!(),
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::flt(lhs.dtype()),
+                                        rd,
+                                        rs1,
+                                        rs2: Some(rs0),
+                                    });
+                                    res.push(asm::Instruction::IType {
+                                        instr: IType::Xori,
+                                        rd,
+                                        rs1: rd,
+                                        imm: Immediate::Value(1),
+                                    });
                                 }
-                            }
+                                None => todo!(),
+                            },
                             _ => unreachable!(),
                         }
                     }
@@ -1094,7 +1085,7 @@ fn translate_block(
                         op: BinaryOperator::Greater,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs0: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1115,19 +1106,17 @@ fn translate_block(
                                 }
                                 None => todo!(),
                             },
-                            ir::Dtype::Float { width, is_const } => {
-                                match allocations.next().unwrap().as_reg() {
-                                    Some(dest_reg) => {
-                                        res.push(asm::Instruction::RType {
-                                            instr: asm::RType::flt(lhs.dtype()),
-                                            rd: dest_reg.into(),
-                                            rs1,
-                                            rs2: Some(rs0),
-                                        });
-                                    }
-                                    None => todo!(),
+                            ir::Dtype::Float { .. } => match allocations.next().unwrap().as_reg() {
+                                Some(dest_reg) => {
+                                    res.push(asm::Instruction::RType {
+                                        instr: asm::RType::flt(lhs.dtype()),
+                                        rd: dest_reg.into(),
+                                        rs1,
+                                        rs2: Some(rs0),
+                                    });
                                 }
-                            }
+                                None => todo!(),
+                            },
                             _ => unreachable!(),
                         }
                     }
@@ -1136,7 +1125,7 @@ fn translate_block(
                         op: BinaryOperator::GreaterOrEqual,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1172,7 +1161,7 @@ fn translate_block(
                         op: BinaryOperator::Modulo,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         assert!(matches!(lhs.dtype(), ir::Dtype::Int { .. }));
 
@@ -1247,7 +1236,7 @@ fn translate_block(
                         op: BinaryOperator::BitwiseXor,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1269,7 +1258,7 @@ fn translate_block(
                         op: BinaryOperator::BitwiseAnd,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1291,7 +1280,7 @@ fn translate_block(
                         op: BinaryOperator::BitwiseOr,
                         lhs,
                         rhs,
-                        dtype: target_dtype @ ir::Dtype::Int { .. },
+                        dtype: ir::Dtype::Int { .. },
                     } => {
                         let rs1: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
@@ -1369,7 +1358,6 @@ fn translate_block(
                                             0,
                                         ));
                                     }
-                                    ir::Dtype::Array { inner, size } => todo!(),
                                     ir::Dtype::Struct { .. } => {
                                         // value is an indirect pointer
                                         let source_location: Register =
@@ -1384,6 +1372,7 @@ fn translate_block(
                                         );
                                     }
                                     ir::Dtype::Unit { .. } => unreachable!(),
+                                    ir::Dtype::Array { .. } => todo!(),
                                     ir::Dtype::Function { .. } => unreachable!(),
                                     ir::Dtype::Typedef { .. } => unreachable!(),
                                 }
@@ -1397,18 +1386,11 @@ fn translate_block(
                                     unreachable!()
                                 };
                                 let offset_to_s0 = stack_mp.get(rid).expect(&format!("{value}"));
-                                res.extend(mk_itype(
-                                    IType::LD,
-                                    Register::T2,
-                                    Register::S0,
-                                    *offset_to_s0 as u64,
-                                ));
-                                let source_location = Register::T2;
                                 match value.dtype() {
-                                    ir::Dtype::Unit { .. } => todo!(),
                                     ir::Dtype::Int { .. }
                                     | ir::Dtype::Float { .. }
-                                    | ir::Dtype::Pointer { .. } => {
+                                    | ir::Dtype::Pointer { .. }
+                                    | ir::Dtype::Struct { .. } => {
                                         cp_to_indirect_target(
                                             (Register::S0, *offset_to_s0),
                                             dest_location,
@@ -1418,24 +1400,10 @@ fn translate_block(
                                             source,
                                         );
                                     }
-                                    ir::Dtype::Array { inner, size } => todo!(),
-                                    ir::Dtype::Struct {
-                                        name,
-                                        fields,
-                                        is_const,
-                                        size_align_offsets,
-                                    } => {
-                                        cp_to_indirect_target(
-                                            (Register::S0, *offset_to_s0),
-                                            dest_location,
-                                            0,
-                                            dtype.clone(),
-                                            &mut res,
-                                            source,
-                                        );
-                                    }
-                                    ir::Dtype::Function { ret, params } => todo!(),
-                                    ir::Dtype::Typedef { name, is_const } => todo!(),
+                                    ir::Dtype::Unit { .. }
+                                    | ir::Dtype::Array { .. }
+                                    | ir::Dtype::Function { .. }
+                                    | ir::Dtype::Typedef { .. } => todo!(),
                                 }
                             }
                         }
@@ -2465,66 +2433,6 @@ fn load_constant_to_reg(
     }
 }
 
-/// may use T0
-/// is operand is constant: store in or_register
-fn load_operand_to_reg(
-    operand: ir::Operand,
-    or_register: Register,
-    res: &mut Vec<asm::Instruction>,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    float_mp: &mut FloatMp,
-) -> Register {
-    match operand {
-        ir::Operand::Constant(c) => {
-            load_constant_to_reg(c, or_register, res, float_mp);
-            or_register
-        }
-        ir::Operand::Register { rid, dtype } => match register_mp.get(&rid).unwrap() {
-            DirectOrInDirect::Direct(RegOrStack::Reg(reg)) => *reg,
-            DirectOrInDirect::Direct(RegOrStack::Stack { offset_to_s0 }) => {
-                res.extend(mk_itype(
-                    IType::load(dtype),
-                    or_register,
-                    Register::S0,
-                    *offset_to_s0 as u64,
-                ));
-                or_register
-            }
-            DirectOrInDirect::InDirect(_) => unreachable!(),
-        },
-    }
-}
-
-fn store_operand_to_reg(
-    operand: ir::Operand,
-    target_register: Register,
-    res: &mut Vec<asm::Instruction>,
-    register_mp: &LinkedHashMap<RegisterId, DirectOrInDirect<RegOrStack>>,
-    float_mp: &mut FloatMp,
-) {
-    let dtype = operand.dtype();
-
-    let x = load_operand_to_reg(operand, target_register, res, register_mp, float_mp);
-    if x != target_register {
-        match dtype {
-            ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => {
-                res.push(asm::Instruction::Pseudo(Pseudo::Mv {
-                    rd: target_register,
-                    rs: x,
-                }));
-            }
-            ir::Dtype::Float { .. } => {
-                res.push(asm::Instruction::Pseudo(Pseudo::Fmv {
-                    rd: target_register,
-                    rs: x,
-                    data_size: DataSize::try_from(dtype).unwrap(),
-                }));
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-
 fn constant_to_stack(
     constant: ir::Constant,
     (target_register, target_base): (Register, u64),
@@ -3010,14 +2918,6 @@ enum DirectOrInDirect<T: Clone + Copy> {
     InDirect(T),
 }
 
-impl<T: Clone + Copy> DirectOrInDirect<T> {
-    fn flatten(&self) -> &T {
-        match self {
-            DirectOrInDirect::Direct(x) | DirectOrInDirect::InDirect(x) => x,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct FunctionAbi {
     params_alloc: Vec<ParamAlloc>,
@@ -3370,229 +3270,6 @@ fn mk_stype(instr: SType, rs1: Register, rs2: Register, imm: u64) -> Vec<asm::In
         ]
     }
 }
-
-// v : (origin, target)
-fn cp_parallel(v: Vec<(Register, Register, ir::Dtype)>) -> Vec<asm::Instruction> {
-    for (src, target, _) in &v {
-        assert_ne!(src, target);
-    }
-    let sources: HashSet<Register> = v.iter().map(|(src, _, _)| *src).collect();
-    let targets: HashSet<Register> = v.iter().map(|(_, dest, _)| *dest).collect();
-    let registers: HashSet<Register> = sources.union(&targets).copied().collect();
-    assert!(sources.len() <= targets.len());
-    assert_eq!(targets.len(), v.len());
-
-    let mut graph: StableGraph<(), ir::Dtype, petgraph::Directed> = Default::default();
-    let mut register_2_node_index: HashMap<Register, NodeIndex> = HashMap::new();
-    let mut node_index_2_register: HashMap<NodeIndex, Register> = HashMap::new();
-
-    for register in registers {
-        let node_index = graph.add_node(());
-        let None = register_2_node_index.insert(register, node_index) else {
-            unreachable!()
-        };
-        let None = node_index_2_register.insert(node_index, register) else {
-            unreachable!()
-        };
-    }
-
-    let mut edges = Vec::new();
-    for (src, target, dtype) in &v {
-        let edge = graph.add_edge(
-            *register_2_node_index.get(src).unwrap(),
-            *register_2_node_index.get(target).unwrap(),
-            dtype.clone(),
-        );
-        edges.push(edge);
-    }
-
-    let loops: Vec<Vec<_>> = petgraph::algo::tarjan_scc(&graph)
-        .into_iter()
-        .filter(|x| x.len() > 1)
-        .collect();
-    let nodes_in_loop: HashSet<NodeIndex> = loops.iter().flatten().copied().collect();
-
-    let mut linear: HashSet<(Register, Register, ir::Dtype)> = HashSet::new();
-    for (src, target, dtype) in &v {
-        match (
-            nodes_in_loop.get(register_2_node_index.get(src).unwrap()),
-            nodes_in_loop.get(register_2_node_index.get(target).unwrap()),
-        ) {
-            (None, None) | (Some(_), None) => {
-                let true = linear.insert((*src, *target, dtype.clone())) else {
-                    unreachable!()
-                };
-            }
-            (Some(_), Some(_)) => {
-                // deal with this in loop
-            }
-            (None, Some(_)) => unreachable!(),
-        }
-    }
-
-    let mut instructions: Vec<asm::Instruction> = Vec::new();
-
-    while !linear.is_empty() {
-        let ref x @ (src, target, ref dtype) = linear
-            .iter()
-            .find(|(_, target, _)| !linear.iter().any(|(src, _, _)| src == target))
-            .unwrap()
-            .clone();
-        instructions.extend(mv_register(src, target, dtype.clone()));
-        let true = linear.remove(x) else {
-            unreachable!()
-        };
-    }
-
-    for loop_in_graph in loops {
-        instructions.extend(cp_parallel_inner(
-            loop_in_graph,
-            &graph,
-            &node_index_2_register,
-        ));
-    }
-
-    instructions
-}
-
-/// the loop_in_graph is not is order
-fn cp_parallel_inner(
-    loop_in_graph: Vec<NodeIndex>,
-    graph: &StableGraph<(), ir::Dtype>,
-    node_index_2_register: &HashMap<NodeIndex, Register>,
-) -> Vec<asm::Instruction> {
-    assert!(loop_in_graph.len() > 1);
-
-    let mut instructions: Vec<asm::Instruction> = Vec::new();
-
-    let loop_in_graph = order_loop(loop_in_graph, graph);
-
-    let get_dtype = |src: NodeIndex, dest: NodeIndex| {
-        let Some(e) = graph.find_edge(src, dest) else {
-            unreachable!()
-        };
-        graph.edge_weight(e).unwrap()
-    };
-
-    // backup the last register
-    let (backup_register, backup_dtype, backup_instructions) = backup_register(
-        *node_index_2_register
-            .get(loop_in_graph.last().unwrap())
-            .unwrap(),
-        get_dtype(*loop_in_graph.last().unwrap(), loop_in_graph[0]),
-    );
-
-    instructions.extend(backup_instructions);
-
-    for i in (0..=loop_in_graph.len() - 2).rev() {
-        let dtype = get_dtype(loop_in_graph[i], loop_in_graph[i + 1]);
-        let x = mv_register(
-            *node_index_2_register.get(&loop_in_graph[i]).unwrap(),
-            *node_index_2_register.get(&loop_in_graph[i + 1]).unwrap(),
-            dtype.clone(),
-        );
-        instructions.extend(x);
-    }
-
-    instructions.extend(mv_register(
-        backup_register,
-        *node_index_2_register.get(&loop_in_graph[0]).unwrap(),
-        backup_dtype,
-    ));
-
-    instructions
-}
-
-fn order_loop(loop_in_graph: Vec<NodeIndex>, graph: &StableGraph<(), ir::Dtype>) -> Vec<NodeIndex> {
-    let mut nodes_in_loop: HashSet<NodeIndex> = loop_in_graph.iter().copied().collect();
-    let mut ordered_loop: Vec<NodeIndex> = vec![loop_in_graph[0]];
-    let true = nodes_in_loop.remove(&loop_in_graph[0]) else {
-        unreachable!()
-    };
-
-    for _ in 0..loop_in_graph.len() - 1 {
-        let src = *ordered_loop.last().unwrap();
-        let mut iter = graph
-            .neighbors_directed(src, petgraph::Direction::Outgoing)
-            .filter(|x| nodes_in_loop.contains(x));
-        let dest: NodeIndex = iter.next().unwrap();
-        assert!(iter.next().is_none());
-        ordered_loop.push(dest);
-        let true = nodes_in_loop.remove(&dest) else {
-            unreachable!()
-        };
-    }
-
-    ordered_loop
-}
-
-fn backup_register(
-    src: Register,
-    dtype: &ir::Dtype,
-) -> (Register, ir::Dtype, Vec<asm::Instruction>) {
-    match &dtype {
-        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } => (
-            Register::T0,
-            dtype.clone(),
-            mv_register(src, Register::T0, dtype.clone()),
-        ),
-        ir::Dtype::Float { .. } => (
-            Register::FT0,
-            dtype.clone(),
-            mv_register(src, Register::FT0, dtype.clone()),
-        ),
-        _ => unreachable!(),
-    }
-}
-
-fn mv_register(src: Register, target: Register, dtype: ir::Dtype) -> Vec<asm::Instruction> {
-    match &dtype {
-        ir::Dtype::Int { .. } | ir::Dtype::Pointer { .. } | ir::Dtype::Struct { .. } => {
-            vec![asm::Instruction::Pseudo(Pseudo::Mv {
-                rd: target,
-                rs: src,
-            })]
-        }
-        ir::Dtype::Float { .. } => {
-            vec![asm::Instruction::Pseudo(Pseudo::Fmv {
-                rd: target,
-                rs: src,
-                data_size: DataSize::try_from(dtype).unwrap(),
-            })]
-        }
-        _ => unreachable!("{dtype}"),
-    }
-}
-
-/*
-fn pre_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> Vec<BlockId> {
-    let mut res = vec![bid_init];
-
-    match dom_tree.get(&bid_init) {
-        Some(v) => {
-            for x in v {
-                res.extend(pre_order(dom_tree, *x));
-            }
-        }
-        None => {}
-    }
-
-    res
-}
-
-fn post_order(dom_tree: &HashMap<BlockId, Vec<BlockId>>, bid_init: BlockId) -> Vec<BlockId> {
-    let mut res = vec![];
-
-    if let Some(v) = dom_tree.get(&bid_init) {
-        for x in v {
-            res.extend(post_order(dom_tree, *x));
-        }
-    }
-
-    res.push(bid_init);
-    res
-}
- */
 
 impl DataSize {
     fn mask(self) -> u64 {
