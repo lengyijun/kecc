@@ -1412,8 +1412,8 @@ fn translate_block(
                                         is_const,
                                         size_align_offsets,
                                     } => {
-                                        cp_from_indirect_to_indirect(
-                                            source_location,
+                                        cp_to_indirect_target(
+                                            (Register::S0, *offset_to_s0),
                                             dest_location,
                                             0,
                                             dtype.clone(),
