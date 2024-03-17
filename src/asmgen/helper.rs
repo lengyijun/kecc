@@ -517,7 +517,7 @@ impl<'a> regalloc2::Function for Gape<'a> {
                 let mut v: Vec<_> = Vec::new();
                 let block = &self.blocks[&bid];
                 match &block.exit {
-                    BlockExit::Jump { .. } => v.leak(),
+                    BlockExit::Jump { .. } => &[],
                     BlockExit::ConditionalJump {
                         condition:
                             Operand::Register {
