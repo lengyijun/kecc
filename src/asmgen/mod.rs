@@ -14,7 +14,7 @@ use crate::ir::{self, BlockId, Declaration, FunctionSignature, HasDtype, Registe
 use crate::opt::deadcode::DeadcodeInner;
 use crate::opt::domtree::DomTree;
 use crate::{Deadcode, Optimize, Translate};
-use bimap::BiMap;
+use bimap::{BiMap, Overwritten};
 use itertools::{iproduct, izip};
 use lang_c::ast::{BinaryOperator, Expression, Initializer, UnaryOperator};
 use linked_hash_map::LinkedHashMap;
@@ -274,13 +274,26 @@ fn translate_function(
 
     let mut alloc_arg = vec![];
 
+    let mut param_slate = BiMap::new();
+
     for (aid, (alloc, dtype)) in izip!(params_alloc, &signature.params).enumerate() {
         let register_id = RegisterId::Arg {
             bid: gape.bid_init,
             aid,
         };
         match alloc {
-            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {}
+            ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Reg(reg))) => {
+                match dtype {
+                    ir::Dtype::Float { .. } => {
+                        let Overwritten::Neither = param_slate
+                            .insert(register_id, regalloc2::Allocation::reg((*reg).into()))
+                        else {
+                            unreachable!()
+                        };
+                    }
+                    _ => {}
+                }
+            }
             ParamAlloc::PrimitiveType(DirectOrInDirect::Direct(RegOrStack::Stack {
                 offset_to_s0,
             })) => {
@@ -439,7 +452,7 @@ fn translate_function(
 
     for bid in gape.reverse_post_order() {
         let mut slate = if bid == gape.bid_init {
-            BiMap::new()
+            param_slate.clone()
         } else {
             let idom: BlockId = idom[&bid];
             methane[&idom].clone()
