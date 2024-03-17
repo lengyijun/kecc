@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+mod cleanjump;
 mod cleanmv;
 mod edge_block;
 mod edge_block_2;
@@ -236,6 +237,7 @@ impl Translate<ir::TranslationUnit> for Asmgen {
         }
 
         asm.unit.rm_needless_mv();
+        asm.unit.rm_needless_jump();
         Ok(asm)
     }
 }
