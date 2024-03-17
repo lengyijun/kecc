@@ -443,7 +443,6 @@ fn translate_function(
     }
     let stack_offset_2_s0 = stack_offset_2_s0;
 
-    let mut temp_block: Vec<asm::Block> = vec![];
     let mut methane: HashMap<BlockId, BiMap<RegisterId, regalloc2::Allocation>> = HashMap::new();
 
     for bid in gape.reverse_post_order() {
@@ -457,7 +456,6 @@ fn translate_function(
         let instructions = translate_block(
             func_name,
             bid,
-            &mut temp_block,
             &stack_mp,
             &mut slate,
             source,
@@ -475,8 +473,6 @@ fn translate_function(
             unreachable!()
         };
     }
-
-    function.blocks.extend(temp_block);
 
     let used_registers: HashSet<Register> = function
         .blocks
@@ -608,7 +604,6 @@ fn translate_function(
 fn translate_block(
     func_name: &str,
     bid: BlockId,
-    temp_block: &mut Vec<asm::Block>,
     stack_mp: &HashMap<RegisterId, i64>,
     slate: &mut BiMap<RegisterId, regalloc2::Allocation>,
     source: &ir::TranslationUnit,
@@ -2183,13 +2178,11 @@ fn translate_block(
                                 unreachable!()
                             }
                         };
-                        let else_label =
-                            gen_jump_arg_or_new_block(func_name, bid, arg_else, temp_block);
                         res.push(asm::Instruction::BType {
                             instr: asm::BType::Beq,
                             rs1,
                             rs2: Register::Zero,
-                            imm: else_label,
+                            imm: Label::new(func_name, arg_else.bid),
                         });
                         res.push(asm::Instruction::Pseudo(Pseudo::J {
                             offset: Label::new(func_name, arg_then.bid),
@@ -2219,13 +2212,11 @@ fn translate_block(
                                 Register::Zero,
                                 *value as u64 & data_size.mask(),
                             ));
-                            let then_label =
-                                gen_jump_arg_or_new_block(func_name, bid, jump_arg, temp_block);
                             res.push(asm::Instruction::BType {
                                 instr: asm::BType::Beq,
                                 rs1,
                                 rs2: Register::T1,
-                                imm: then_label,
+                                imm: Label::new(func_name, jump_arg.bid),
                             })
                         }
                         res.push(asm::Instruction::Pseudo(Pseudo::J {
@@ -2333,26 +2324,6 @@ fn clown<'a>(
             function_signature.try_alloc(source)
         }
         _ => unreachable!(),
-    }
-}
-
-fn gen_jump_arg_or_new_block(
-    func_name: &str,
-    from: BlockId,
-    jump_arg: &ir::JumpArg,
-    temp_block: &mut Vec<asm::Block>,
-) -> Label {
-    if jump_arg.args.is_empty() {
-        Label::new(func_name, jump_arg.bid)
-    } else {
-        let label = Label(format!(".{func_name}_{from}_{}", jump_arg.bid));
-        temp_block.push(asm::Block {
-            label: Some(label.clone()),
-            instructions: vec![asm::Instruction::Pseudo(Pseudo::J {
-                offset: Label::new(func_name, jump_arg.bid),
-            })],
-        });
-        label
     }
 }
 
