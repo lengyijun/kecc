@@ -1391,14 +1391,39 @@ fn translate_block(
                                     *offset_to_s0 as u64,
                                 ));
                                 let source_location = Register::T2;
-                                cp_from_indirect_to_indirect(
-                                    source_location,
-                                    dest_location,
-                                    0,
-                                    dtype.clone(),
-                                    &mut res,
-                                    source,
-                                );
+                                match value.dtype() {
+                                    ir::Dtype::Unit { .. } => todo!(),
+                                    ir::Dtype::Int { .. }
+                                    | ir::Dtype::Float { .. }
+                                    | ir::Dtype::Pointer { .. } => {
+                                        cp_to_indirect_target(
+                                            (Register::S0, *offset_to_s0),
+                                            dest_location,
+                                            0,
+                                            dtype.clone(),
+                                            &mut res,
+                                            source,
+                                        );
+                                    }
+                                    ir::Dtype::Array { inner, size } => todo!(),
+                                    ir::Dtype::Struct {
+                                        name,
+                                        fields,
+                                        is_const,
+                                        size_align_offsets,
+                                    } => {
+                                        cp_from_indirect_to_indirect(
+                                            source_location,
+                                            dest_location,
+                                            0,
+                                            dtype.clone(),
+                                            &mut res,
+                                            source,
+                                        );
+                                    }
+                                    ir::Dtype::Function { ret, params } => todo!(),
+                                    ir::Dtype::Typedef { name, is_const } => todo!(),
+                                }
                             }
                         }
                     }
