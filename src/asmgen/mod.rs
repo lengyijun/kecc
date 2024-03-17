@@ -2970,8 +2970,13 @@ fn translate_block(
                                 target_reg,
                             ))),
                             ir::Operand::Register { rid, dtype },
-                        ) => match foo(register_mp.get(rid).unwrap()) {
-                            None => {
+                        ) => match register_mp.get(rid).unwrap().flatten() {
+                            RegOrStack::Reg(src_reg) => {
+                                if *src_reg != target_reg {
+                                    to_be_cp_parallel.push((*src_reg, target_reg, dtype.clone()))
+                                }
+                            }
+                            RegOrStack::Stack { .. } => {
                                 store_operand_to_reg(
                                     operand.clone(),
                                     target_reg,
@@ -2979,11 +2984,6 @@ fn translate_block(
                                     register_mp,
                                     float_mp,
                                 );
-                            }
-                            Some(src_reg) => {
-                                if src_reg != target_reg {
-                                    to_be_cp_parallel.push((src_reg, target_reg, dtype.clone()))
-                                }
                             }
                         },
                         (
@@ -4881,6 +4881,14 @@ enum DirectOrInDirect<T: Clone + Copy> {
     InDirect(T),
 }
 
+impl<T: Clone + Copy> DirectOrInDirect<T> {
+    fn flatten(&self) -> &T {
+        match self {
+            DirectOrInDirect::Direct(x) | DirectOrInDirect::InDirect(x) => x,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FunctionAbi {
     params_alloc: Vec<ParamAlloc>,
@@ -5467,15 +5475,6 @@ impl DataSize {
             DataSize::SinglePrecision => unreachable!(),
             DataSize::DoublePrecision => unreachable!(),
         }
-    }
-}
-
-fn foo(x: &DirectOrInDirect<RegOrStack>) -> Option<Register> {
-    match x {
-        DirectOrInDirect::Direct(RegOrStack::Reg(reg))
-        | DirectOrInDirect::InDirect(RegOrStack::Reg(reg)) => Some(*reg),
-        DirectOrInDirect::Direct(RegOrStack::Stack { .. })
-        | DirectOrInDirect::InDirect(RegOrStack::Stack { .. }) => None,
     }
 }
 
