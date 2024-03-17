@@ -698,7 +698,8 @@ impl<'a> regalloc2::Function for Gape<'a> {
                                     *self.reg_mp.get_by_left(rid).unwrap(),
                                     regalloc2::OperandConstraint::Any,
                                     regalloc2::OperandKind::Use,
-                                    regalloc2::OperandPos::Early,
+                                    regalloc2::OperandPos::Late, // bad: jalr a0
+                                                                     // good: jalr s0
                                 ));
                             }
                         }
