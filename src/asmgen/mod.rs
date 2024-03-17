@@ -150,8 +150,9 @@ impl Translate<ir::TranslationUnit> for Asmgen {
                         vec![],
                     ],
                     non_preferred_regs_by_class: [
-                        // TODO: can we use T5 T6 ?
                         vec![
+                            Register::T5.into(),
+                            Register::T6.into(),
                             // Register::T0.into(),
                             // Register::T1.into(),
                             // Register::T2.into(),
