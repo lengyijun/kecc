@@ -157,7 +157,7 @@ impl Translate<ir::TranslationUnit> for Asmgen {
                             Register::T5.into(),
                             Register::T6.into(),
                             // Register::T0.into(),
-                            // Register::T1.into(),
+                            Register::T1.into(),
                             // Register::T2.into(),
                             Register::A6.into(),
                             Register::A7.into(),
@@ -1308,13 +1308,13 @@ fn translate_block(
                         value,
                     } => {
                         res.push(asm::Instruction::Pseudo(Pseudo::La {
-                            rd: Register::T1,
+                            rd: Register::T0,
                             symbol: Label(name.clone()),
                         }));
                         let rs2: Register = allocations.next().unwrap().as_reg().unwrap().into();
                         res.push(asm::Instruction::SType {
                             instr: SType::store(dtype.clone()),
-                            rs1: Register::T1,
+                            rs1: Register::T0,
                             rs2,
                             imm: Immediate::Value(0),
                         });
@@ -1815,11 +1815,11 @@ fn translate_block(
                                 let offset_to_s0 = stack_mp[rid];
                                 res.extend(mk_itype(
                                     IType::load(dtype.clone()),
-                                    Register::T1,
+                                    Register::T0,
                                     Register::S0,
                                     offset_to_s0 as u64,
                                 ));
-                                Register::T1
+                                Register::T0
                             }
                             ir::Operand::Register { .. } => {
                                 allocations.next().unwrap().as_reg().unwrap().into()
@@ -2213,14 +2213,14 @@ fn translate_block(
                             let data_size = DataSize::try_from(dtype.clone()).unwrap();
                             res.extend(mk_itype(
                                 IType::Addi(data_size),
-                                Register::T1,
+                                Register::T0,
                                 Register::Zero,
                                 *value as u64 & data_size.mask(),
                             ));
                             res.push(asm::Instruction::BType {
                                 instr: asm::BType::Beq,
                                 rs1,
-                                rs2: Register::T1,
+                                rs2: Register::T0,
                                 imm: Label::new(func_name, jump_arg.bid),
                             })
                         }
